@@ -239,3 +239,49 @@ def test_image_result_buttons_degrade_without_url():
     buttons = _find_buttons(markup)
     assert all("web_app" not in b for b in buttons)
     assert any(b.get("callback_data") == "regen" for b in buttons)
+
+
+# --- /avatar 命令 ----------------------------------------------------------
+
+def test_avatar_command_missing_prompt():
+    c = FakeClient()
+    bot_mod.handle_update(c, _msg_update("/avatar   "))
+    assert len(c.messages) == 1
+    assert c.messages[0][1] == bot_mod.AVATAR_EMPTY_HINT
+    assert not c.photos_bytes
+
+
+def test_avatar_command_generates_base64_photo():
+    captured = {}
+
+    def gen(prompt, **kw):
+        captured["prompt"] = prompt
+        return _ok_base64(prompt, **kw)
+
+    c = FakeClient()
+    bot_mod.handle_update(c, _msg_update("/avatar 短发女生 简约时尚"), generate=gen)
+    assert len(c.photos_bytes) == 1
+    # 走 avatar adapter：出图 prompt 被改写为头像方向，而非原样透传
+    assert "avatar" in captured["prompt"].lower()
+    assert "短发女生 简约时尚" in captured["prompt"]
+
+
+def test_avatar_command_provider_error_friendly():
+    def fail(prompt, **kw):
+        raise ImageGenerationError("IMAGE_GENERATION_PROVIDER_FAILED", "raw detail LEAK")
+
+    c = FakeClient()
+    bot_mod.handle_update(c, _msg_update("/avatar 一个人"), generate=fail)
+    assert len(c.messages) == 1
+    assert c.messages[0][1] == bot_mod.PROVIDER_FAILED_HINT
+    assert "raw detail" not in c.messages[0][1]
+
+
+def test_avatar_command_no_base64_or_key_leak():
+    c = FakeClient()
+    bot_mod.handle_update(c, _msg_update("/avatar 一个人"), generate=_ok_base64)
+    for _, text, _ in c.messages:
+        assert TINY_PNG_B64 not in text
+        assert SECRET_TOKEN not in text
+    for _, _, caption, _ in c.photos_bytes:
+        assert TINY_PNG_B64 not in caption
