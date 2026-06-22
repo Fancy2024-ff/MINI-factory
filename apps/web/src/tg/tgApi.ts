@@ -7,6 +7,9 @@ import type {
   GenerateImageResponse,
   ImageResult,
   DisplayImage,
+  TemplateGenerationRequest,
+  TemplateGenerationResponse,
+  TemplateResult,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
@@ -53,6 +56,52 @@ export function toDisplayImage(result: ImageResult | undefined): DisplayImage | 
   return {
     src,
     title: result.title || 'AI 图片生成',
+    caption: result.caption || result.prompt || '',
+    prompt: result.prompt || '',
+  }
+}
+
+// 模板级生成：POST /api/generation/template。结构化 input 由后端 adapter 改写。
+export async function generateTemplate(
+  req: TemplateGenerationRequest,
+): Promise<TemplateGenerationResponse> {
+  try {
+    const res = await fetch(`${BASE}/api/generation/template`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: { code: 'HTTP_ERROR', message: '服务暂时不可用，请稍后再试', retryable: true },
+      }
+    }
+    return (await res.json()) as TemplateGenerationResponse
+  } catch {
+    return {
+      ok: false,
+      error: { code: 'NETWORK_ERROR', message: '网络异常，请检查连接后重试', retryable: true },
+    }
+  }
+}
+
+// 模板 result（与 image result 同形）规范化为展示图。
+export function templateResultToDisplay(
+  result: TemplateResult | undefined,
+  fallbackTitle = 'AI 头像已生成',
+): DisplayImage | null {
+  if (!result) return null
+  let src = ''
+  if (result.image_url) {
+    src = result.image_url
+  } else if (result.image_base64) {
+    src = `data:image/jpeg;base64,${result.image_base64}`
+  }
+  if (!src) return null
+  return {
+    src,
+    title: result.title || fallbackTitle,
     caption: result.caption || result.prompt || '',
     prompt: result.prompt || '',
   }

@@ -1,4 +1,4 @@
-<!-- MiniForge 工厂首页（Telegram WebApp）。只 ai-image 开放，其余标注即将开放。 -->
+<!-- MiniForge 工厂首页（Telegram WebApp）。ai-image / avatar 已开放，其余即将开放。 -->
 <template>
   <div class="home">
     <header class="hero">
@@ -15,6 +15,15 @@
           <div class="card-desc">输入描述，选风格与比例，立即出图</div>
         </div>
         <div class="badge badge-open">已开放</div>
+      </button>
+
+      <button class="card card-open" @click="openAvatar">
+        <div class="card-icon">🧑‍🎨</div>
+        <div class="card-body">
+          <div class="card-title">AI 头像</div>
+          <div class="card-desc">文字生成社交头像 / 写真风格图</div>
+        </div>
+        <div class="badge badge-new">新上线</div>
       </button>
 
       <div v-for="item in upcoming" :key="item.id" class="card card-soon">
@@ -35,7 +44,6 @@
 const emit = defineEmits<{ (e: 'navigate', path: string): void }>()
 
 const upcoming = [
-  { id: 'avatar', icon: '🧑‍🎨', title: 'AI 头像', desc: '上传照片，生成多风格头像' },
   { id: 'sticker', icon: '😄', title: '表情包', desc: '一个主题，生成一组贴纸' },
   { id: 'pet', icon: '🐶', title: '宠物说话', desc: '让你的宠物开口讲话' },
   { id: 'blessing', icon: '🎉', title: '祝福卡片', desc: '节日祝福，一键生成' },
@@ -43,6 +51,10 @@ const upcoming = [
 
 function openAiImage() {
   emit('navigate', '/tg/ai-image')
+}
+
+function openAvatar() {
+  emit('navigate', '/tg/avatar')
 }
 </script>
 
@@ -67,6 +79,7 @@ function openAiImage() {
 .card-desc { font-size: 13px; color: var(--tg-hint, #888); margin-top: 3px; }
 .badge { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
 .badge-open { background: #e8f7ee; color: #1a9c52; }
+.badge-new { background: #f1eefe; color: #6c5ce7; }
 .badge-soon { background: #f0f0f3; color: #999; }
 .home-foot { text-align: center; font-size: 12px; color: var(--tg-hint, #aaa); margin-top: 28px; }
 </style>

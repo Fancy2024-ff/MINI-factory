@@ -14,6 +14,38 @@ export interface GenerateImageRequest {
   aspect_ratio: AspectRatio
 }
 
+// 模板级生成请求：结构化 input 由后端 adapter 改写为出图 prompt。
+export interface TemplateGenerationInput {
+  prompt: string
+  style?: string
+  mood?: string
+  scene?: string
+  aspect_ratio?: AspectRatio
+}
+
+export interface TemplateGenerationRequest {
+  template_id: 'ai-image' | 'avatar-viral'
+  input: TemplateGenerationInput
+}
+
+// 模板级生成成功返回。
+export interface TemplateResult {
+  image_url?: string | null
+  image_base64?: string | null
+  title?: string
+  caption?: string
+  prompt?: string
+  metadata?: Record<string, any>
+}
+
+export interface TemplateGenerationResponse {
+  ok: boolean
+  template_id?: string
+  preview_type?: string
+  result?: TemplateResult
+  error?: ApiError
+}
+
 // 后端 /api/generation/image 成功返回的 result。
 export interface ImageResult {
   preview_type: 'image'
