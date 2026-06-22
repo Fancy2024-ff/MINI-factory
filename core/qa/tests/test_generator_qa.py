@@ -120,7 +120,7 @@ def _make_generated_project(miniapp_dir: Path, *, with_blueprint=True,
         )
     svc = "export function mockGenerate(){}"
     if blueprint_driven:
-        svc = "export function loadBlueprint(){}\nexport function generateFromBlueprint(){}\n" + svc
+        svc = "export const GENERATION_MODE = 'mock'\nexport const IMAGE_GENERATION_PATH = '/api/generation/image'\nasync function callRealApi(){}\nexport function loadBlueprint(){}\nexport function generateFromBlueprint(){}\n" + svc
     (src / "services" / "generation.ts").write_text(svc, encoding="utf-8")
     if token_residue:
         (src / "config" / "leak.ts").write_text("export const X = '__APP_TEMPLATE__'", encoding="utf-8")
@@ -133,6 +133,8 @@ def test_generated_project_passes(tmp_path):
     assert result["checks"]["generated_blueprint_exists"] is True
     assert result["checks"]["generated_no_token_residue"] is True
     assert result["checks"]["generation_blueprint_driven"] is True
+    assert result["checks"]["generation_api_mode_path"] is True
+    assert result["checks"]["generated_no_provider_secret_residue"] is True
 
 
 def test_generated_missing_blueprint_fails(tmp_path):
@@ -156,4 +158,26 @@ def test_generated_not_blueprint_driven_fails(tmp_path):
     _make_generated_project(mini, blueprint_driven=False)
     result = run_generator_qa(miniapp_dir=mini)
     assert result["checks"]["generation_blueprint_driven"] is False
+    assert not result["passed"]
+
+
+def test_generated_provider_secret_residue_fails(tmp_path):
+    mini = tmp_path / "mini"
+    _make_generated_project(mini)
+    (mini / "src" / "config" / "bad.ts").write_text(
+        "export const BAD = 'IMAGE_GENERATION_API_KEY'",
+        encoding="utf-8",
+    )
+    result = run_generator_qa(miniapp_dir=mini)
+    assert result["checks"]["generated_no_provider_secret_residue"] is False
+    assert not result["passed"]
+
+
+def test_generated_missing_api_mode_fails(tmp_path):
+    mini = tmp_path / "mini"
+    _make_generated_project(mini)
+    svc = "export function loadBlueprint(){}\nexport function generateFromBlueprint(){}\nexport function mockGenerate(){}"
+    (mini / "src" / "services" / "generation.ts").write_text(svc, encoding="utf-8")
+    result = run_generator_qa(miniapp_dir=mini)
+    assert result["checks"]["generation_api_mode_path"] is False
     assert not result["passed"]

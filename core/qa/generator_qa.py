@@ -32,6 +32,16 @@ from core.generator.blueprint_builder import (
 
 TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "generator" / "src" / "templates"
 
+_FRONTEND_FORBIDDEN_FRAGMENTS = (
+    "IMAGE_GENERATION_API_KEY",
+    "IMAGE_GENERATION_ENDPOINT",
+    "Authorization",
+    "Bearer ",
+    "api_key",
+    "access_token",
+    "provider_key",
+)
+
 # 用于校验生成项目的最小 app/prd（GeneratorQA 不跑生成，只在需要时合成 blueprint）。
 _SAMPLE_APP = {"name": "QA Sample", "name_cn": "质检样例", "description_cn": "GeneratorQA 校验用样例。"}
 _SAMPLE_PRD = {"target_platforms": ["wechat"]}
@@ -123,12 +133,29 @@ def _check_generated_project(miniapp_dir: Path, checks: dict, issues: list[str])
                 break
     checks["generated_no_token_residue"] = no_residue
 
-    # generation.ts 支持 blueprint 驱动
+    no_frontend_secret = True
+    for f in miniapp_dir.rglob("*"):
+        if f.is_file() and f.suffix in (".vue", ".json", ".ts", ".md", ".html"):
+            if "node_modules" in str(f) or "dist" in str(f):
+                continue
+            text = _read(f)
+            if any(fragment in text for fragment in _FRONTEND_FORBIDDEN_FRAGMENTS):
+                no_frontend_secret = False
+                issues.append(f"生成项目残留 provider 凭证片段: {f.relative_to(miniapp_dir)}")
+                break
+    checks["generated_no_provider_secret_residue"] = no_frontend_secret
+
+    # generation.ts 必须是 blueprint 驱动
     svc_txt = _read(src / "services" / "generation.ts")
     svc_ok = bool(svc_txt) and "loadBlueprint" in svc_txt and "generateFromBlueprint" in svc_txt
     checks["generation_blueprint_driven"] = svc_ok
     if not svc_ok:
-        issues.append("generation.ts 未支持 blueprint 驱动（loadBlueprint/generateFromBlueprint）")
+        issues.append("generation.ts 缺少 blueprint 驱动入口（loadBlueprint/generateFromBlueprint）")
+
+    api_mode_ok = bool(svc_txt) and "callRealApi" in svc_txt and "GENERATION_MODE" in svc_txt and "IMAGE_GENERATION_PATH" in svc_txt
+    checks["generation_api_mode_path"] = api_mode_ok
+    if not api_mode_ok:
+        issues.append("generation.ts 缺少真实 API 链路路径（callRealApi/GENERATION_MODE/IMAGE_GENERATION_PATH）")
 
 
 def run_generator_qa(miniapp_dir: Path | None = None) -> dict:
