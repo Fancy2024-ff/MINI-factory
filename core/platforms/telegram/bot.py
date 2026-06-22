@@ -16,6 +16,7 @@ import logging
 from typing import Any, Callable
 
 from core.integrations.image_generation import ImageGenerationError, generate_image
+from core.generator.template_generation import build_avatar_prompt
 from core.platforms.telegram.api import TelegramAPIError, TelegramClient
 
 logger = logging.getLogger("telegram.bot")
@@ -28,6 +29,7 @@ START_TEXT = (
     "  一只戴墨镜的柴犬，赛博朋克风格\n\n"
     "命令：\n"
     "  /image <描述>  生成图片\n"
+    "  /avatar <人物描述>  生成 AI 头像\n"
     "  /help  查看示例"
 )
 
@@ -35,12 +37,13 @@ HELP_TEXT = (
     "🖼 用法示例：\n\n"
     "  /image 海边日落，油画风格\n"
     "  /image 一只穿宇航服的猫，3D 卡通\n"
-    "  /image 雪山下的咖啡馆，水彩\n\n"
-    "也可以直接发描述文字（不带命令）。\n"
+    "  /avatar 25 岁短发女生，简约时尚，自信微笑\n\n"
+    "也可以直接发描述文字（不带命令）生成图片。\n"
     f"描述长度上限 {MAX_PROMPT_LEN} 字符。"
 )
 
 EMPTY_PROMPT_HINT = "请在命令后输入图片描述，例如：/image 一只戴帽子的猫"
+AVATAR_EMPTY_HINT = "请在命令后输入人物描述，例如：/avatar 25 岁短发女生，简约时尚"
 NOT_CONFIGURED_HINT = "图片生成服务暂未配置，请稍后再试。"
 PROVIDER_FAILED_HINT = "图片生成失败，请换个描述或稍后再试。"
 TOO_LONG_HINT = f"描述太长啦，请控制在 {MAX_PROMPT_LEN} 字符以内。"
@@ -144,6 +147,18 @@ def handle_update(
         return
     if stripped.startswith("/help"):
         client.send_message(chat_id, HELP_TEXT)
+        return
+    if stripped.startswith("/avatar"):
+        subject = stripped[len("/avatar"):].strip()
+        if not subject:
+            client.send_message(chat_id, AVATAR_EMPTY_HINT)
+            return
+        if len(subject) > MAX_PROMPT_LEN:
+            client.send_message(chat_id, TOO_LONG_HINT)
+            return
+        # 用 avatar adapter 把人物描述改写为头像出图 prompt，再走统一生成回复。
+        avatar_prompt = build_avatar_prompt({"prompt": subject})
+        _generate_and_reply(client, chat_id, avatar_prompt, generate, resolved_webapp)
         return
 
     prompt, is_command = extract_prompt(stripped)
