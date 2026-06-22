@@ -104,6 +104,85 @@ function sanitizePageName(name: string, index: number): string {
   return cleaned || `feature-${index + 1}`;
 }
 
+const VIRAL_TEMPLATES = new Set([
+  "avatar-viral", "sticker-viral", "pet-talk-viral",
+  "funny-video-viral", "blessing-video-viral",
+]);
+
+const SUPPORTED_PREVIEW_TYPES = new Set([
+  "avatar", "stickerPack", "petVideo", "funnyStoryboard", "blessingCard",
+  "image", "text",
+]);
+
+/**
+ * Resolve a template blueprint from its template.json (parity with Python
+ * core/generator/blueprint_builder.py). Viral templates MUST have a valid
+ * template.json (no silent downgrade); fallback templates default to a text
+ * blueprint. Returns the structured blueprint object written to the project.
+ */
+async function buildBlueprint(
+  template: string,
+  prd: PRD,
+  templatesDir: string
+): Promise<any> {
+  const cfgPath = path.join(templatesDir, template, "template.json");
+  const appName = prd.app_name;
+  if (await fs.pathExists(cfgPath)) {
+    const cfg = await fs.readJSON(cfgPath);
+    if (cfg.id !== template) {
+      throw new Error(`${template}/template.json id=${cfg.id} 与目录名不一致`);
+    }
+    if (!SUPPORTED_PREVIEW_TYPES.has(cfg.preview_type)) {
+      throw new Error(`${template}/template.json preview_type=${cfg.preview_type} 不受支持`);
+    }
+    const resultContract = (cfg.result_fields || [])
+      .map((f: any) => f.id)
+      .filter(Boolean);
+    return {
+      template_id: cfg.id,
+      app_name: appName || cfg.name_cn,
+      preview_type: cfg.preview_type,
+      input_fields: cfg.input_fields,
+      pages: cfg.pages || [],
+      result_contract: resultContract,
+      share_hooks: cfg.share_hooks,
+      unlock_hooks: cfg.unlock_hooks,
+      growth_angles: cfg.growth_angles || [],
+      compliance_notes: cfg.compliance_notes || [],
+      mock_examples: cfg.mock_examples,
+      is_fallback: false,
+    };
+  }
+  if (VIRAL_TEMPLATES.has(template)) {
+    throw new Error(`传播型模板 ${template} 缺少 template.json，拒绝静默降级。`);
+  }
+  // fallback blueprint（与 Python _fallback_blueprint 对齐的轻量版）
+  return {
+    template_id: template,
+    app_name: appName || "小程序",
+    preview_type: "text",
+    input_fields: [
+      { id: "text", label: "输入内容", type: "textarea", required: false,
+        placeholder: "请输入内容 / 主题 / 一句话..." },
+    ],
+    pages: ["index", "form", "result", "profile"],
+    result_contract: ["text"],
+    share_hooks: ["看看我用它生成的结果", "一键生成，分享解锁完整高清结果"],
+    unlock_hooks: ["分享解锁高清无水印结果", "分享解锁更多模板"],
+    growth_angles: ["通用工具型分享", "结果页内置分享入口"],
+    compliance_notes: ["生成内容需符合平台规范"],
+    mock_examples: [{
+      title: "生成结果",
+      preview_type: "text",
+      preview_data: { text: "这是一段示例生成结果。" },
+      share_title: "看看我用它生成的结果",
+      share_copy: "一键生成，分享解锁完整高清结果",
+      unlock_hint: "分享解锁高清无水印结果 + 解锁更多模板",
+    }],
+    is_fallback: true,
+  };
+}
+
 export async function generateProject(
   prd: PRD,
   template: string = "ai-tool"
@@ -151,11 +230,18 @@ export async function generateProject(
   const pagesDir = path.join(srcDir, "pages");
   await fs.ensureDir(pagesDir);
 
+  // --- 2a. 解析模板蓝图（template.json -> blueprint），与 Python blueprint_builder 对齐。
+  // viral 模板缺 template.json 视为非法（保持与 Python 同样不静默降级的口径）；
+  // 兜底模板缺配置 -> preview_type 'text'。完整蓝图写到 src/config/blueprint.json。
+  const blueprint = await buildBlueprint(selected, prd, TEMPLATES_DIR);
+  const previewType = blueprint.preview_type;
+
   // --- 2b. Fill the shared token contract on the data-injected template
   // pages. The base template (single source of page structure) ships
   // __APP_NAME__ / __APP_SUBTITLE__ / __APP_FEATURES_JSON__ /
-  // __APP_FEATURE_TITLE__ placeholders; runner.py fills the same tokens.
-  // This keeps page STRUCTURE in the template, only DATA here.
+  // __APP_FEATURE_TITLE__ / __APP_TEMPLATE__ / __APP_PREVIEW_TYPE__ placeholders;
+  // runner.py fills the same tokens. This keeps page STRUCTURE in the template,
+  // only DATA here.
   const featureNames = (prd.core_features || []).map((f) => f.name).filter(Boolean);
   const tokens: Record<string, string> = {
     __APP_NAME__: prd.app_name,
@@ -163,6 +249,7 @@ export async function generateProject(
     __APP_FEATURES_JSON__: JSON.stringify(featureNames),
     __APP_FEATURE_TITLE__: featureNames[0] || "功能",
     __APP_TEMPLATE__: selected,
+    __APP_PREVIEW_TYPE__: previewType,
   };
   for (const rel of [
     "pages/index/index.vue",
@@ -176,6 +263,14 @@ export async function generateProject(
       await fs.writeFile(f, text, "utf-8");
     }
   }
+
+  // --- 2c. Write the structured blueprint into the generated project. ---
+  await fs.ensureDir(path.join(srcDir, "config"));
+  await fs.writeFile(
+    path.join(srcDir, "config", "blueprint.json"),
+    JSON.stringify(blueprint, null, 2),
+    "utf-8"
+  );
 
   // --- 3. Generate PRD feature pages (never overwrite template pages) ---
   let pagesGenerated = 0;

@@ -34,6 +34,15 @@ VIRAL_TEMPLATES = {
     "blessing-video-viral": "greeting",
 }
 
+# 题材模板 -> 期望的 blueprint.preview_type（与 template.json / generation.ts 对齐）
+VIRAL_PREVIEW_TYPES = {
+    "avatar-viral": "avatar",
+    "sticker-viral": "stickerPack",
+    "pet-talk-viral": "petVideo",
+    "funny-video-viral": "funnyStoryboard",
+    "blessing-video-viral": "blessingCard",
+}
+
 
 def _app(name, name_cn, desc_cn, features):
     return {"name": name, "name_cn": name_cn, "description_cn": desc_cn,
@@ -57,6 +66,16 @@ def test_viral_template_real_build(template, sig_page):
                     continue
                 assert "__APP_" not in f.read_text(encoding="utf-8-sig"), \
                     f"unfilled token in {f.relative_to(miniapp_dir)}"
+
+        # blueprint.json 存在且 template_id / preview_type 正确
+        import json as _bpjson
+        bp_path = miniapp_dir / "src" / "config" / "blueprint.json"
+        assert bp_path.exists(), "缺少 src/config/blueprint.json"
+        bp = _bpjson.loads(bp_path.read_text(encoding="utf-8-sig"))
+        assert bp["template_id"] == template, f"blueprint template_id={bp['template_id']} != {template}"
+        assert bp["preview_type"] == VIRAL_PREVIEW_TYPES[template], \
+            f"blueprint preview_type={bp['preview_type']} != {VIRAL_PREVIEW_TYPES[template]}"
+        assert bp["is_fallback"] is False, f"{template} blueprint 不应是 fallback"
         # 签名页源码存在
         assert (miniapp_dir / "src" / "pages" / sig_page / f"{sig_page}.vue").exists()
         # 签名页已注册进 pages.json（否则不会被编译进 dist）

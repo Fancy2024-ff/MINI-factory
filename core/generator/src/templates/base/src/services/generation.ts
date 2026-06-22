@@ -1,12 +1,16 @@
-// 统一生成服务（本地 mock 闭环，预留真实 API 切换点）。
+// 统一生成服务（本地 mock 闭环，blueprint 驱动，预留真实 API 切换点）。
 //
 // 设计：
-// - mockGenerate 根据 SELECTED_TEMPLATE 返回不同题材的 GeneratedResult。
-// - 不写真实 key、不硬编码真实服务；GENERATION_ENDPOINT 为空时走本地 mock，
-//   后续把它指向真实后端即可切换（callRealApi 预留）。
-// - 结果存到本地缓存（uni.setStorageSync），result 页按 id 读取。
+// - blueprint.json（codegen 由 template.json 合成）是题材事实源：preview_type /
+//   mock_examples / share_hooks / unlock_hooks 都从蓝图读取，generation.ts 不再
+//   硬编码每个模板的分支。
+// - blueprint 缺失/损坏时回退到安全默认值（不崩、不阻断闭环）。
+// - GENERATION_ENDPOINT 为空 + GENERATION_MODE='mock' 时走本地 mock；
+//   后续把 endpoint 指向真实后端、mode 切 'api' 即可启用 callRealApi。不写真实 key。
 
-import { SELECTED_TEMPLATE } from '../config/template'
+import { SELECTED_TEMPLATE, PREVIEW_TYPE } from '../config/template'
+// blueprint.json 由 codegen 在生成项目时写入（template.json -> blueprint）。
+import blueprintJson from '../config/blueprint.json'
 
 export type PreviewType =
   | 'avatar'
@@ -16,6 +20,30 @@ export type PreviewType =
   | 'blessingCard'
   | 'image'
   | 'text'
+
+export interface MockExample {
+  title: string
+  preview_type: PreviewType
+  preview_data: any
+  share_title: string
+  share_copy: string
+  unlock_hint: string
+}
+
+export interface Blueprint {
+  template_id: string
+  app_name: string
+  preview_type: PreviewType
+  input_fields: any[]
+  pages: string[]
+  result_contract: string[]
+  share_hooks: string[]
+  unlock_hooks: string[]
+  growth_angles: string[]
+  compliance_notes: string[]
+  mock_examples: MockExample[]
+  is_fallback: boolean
+}
 
 export interface GeneratedResult {
   id: string
@@ -28,6 +56,10 @@ export interface GeneratedResult {
   unlockHint: string
   watermarkEnabled: boolean
   createdAt: number
+  // 可选增强字段
+  inputSummary?: string
+  sourceBlueprint?: string
+  nextActionHint?: string
 }
 
 export interface GenerateInput {
@@ -36,110 +68,94 @@ export interface GenerateInput {
   extra?: Record<string, any>
 }
 
-// 预留：真实后端地址。留空 = 走本地 mock。切真实服务时填这里 + 实现 callRealApi。
+// 预留：真实后端地址 + 模式开关。留空/mock = 走本地 mock。
 const GENERATION_ENDPOINT = ''
+const GENERATION_MODE: 'mock' | 'api' = 'mock'
 
 const STORAGE_PREFIX = 'gen-result:'
+
+// 安全默认蓝图：blueprint.json 缺失/损坏时兜底，保证闭环不断。
+const FALLBACK_BLUEPRINT: Blueprint = {
+  template_id: SELECTED_TEMPLATE,
+  app_name: '',
+  preview_type: (PREVIEW_TYPE as PreviewType) || 'text',
+  input_fields: [],
+  pages: [],
+  result_contract: [],
+  share_hooks: ['看看我用它生成的结果', '一键生成，分享解锁完整高清结果'],
+  unlock_hooks: ['分享解锁高清无水印结果', '分享解锁更多模板'],
+  growth_angles: [],
+  compliance_notes: [],
+  mock_examples: [{
+    title: '生成结果',
+    preview_type: (PREVIEW_TYPE as PreviewType) || 'text',
+    preview_data: { text: '这是一段示例生成结果。' },
+    share_title: '看看我用它生成的结果',
+    share_copy: '一键生成，分享解锁完整高清结果',
+    unlock_hint: '分享解锁高清无水印结果 + 解锁更多模板',
+  }],
+  is_fallback: true,
+}
+
+let _blueprintCache: Blueprint | null = null
+
+// 读取生成项目内的 blueprint.json；缺字段用安全默认值补齐。
+export function loadBlueprint(): Blueprint {
+  if (_blueprintCache) return _blueprintCache
+  try {
+    const bp = blueprintJson as unknown as Blueprint
+    _blueprintCache = { ...FALLBACK_BLUEPRINT, ...bp }
+  } catch (e) {
+    _blueprintCache = FALLBACK_BLUEPRINT
+  }
+  return _blueprintCache
+}
 
 function genId(): string {
   return 'g-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36)
 }
 
-// 题材 -> mock 结果形态。每类返回不同 previewType / previewData / 文案。
-function buildMock(template: string, input: GenerateInput): Omit<GeneratedResult, 'id' | 'createdAt'> {
+// PLACEHOLDER_GENERATION_BODY
+
+// 由 blueprint 的 mock_example + 用户输入合成一个 GeneratedResult（不含 id/createdAt）。
+function buildFromBlueprint(
+  bp: Blueprint,
+  input: GenerateInput,
+): Omit<GeneratedResult, 'id' | 'createdAt'> {
+  const example = bp.mock_examples[0] || FALLBACK_BLUEPRINT.mock_examples[0]
   const text = (input.text || '').trim()
-  switch (template) {
-    case 'avatar-viral':
-      return {
-        template,
-        title: '你的专属 AI 头像',
-        previewType: 'avatar',
-        previewData: {
-          styles: ['赛博朋克', '日系动漫', '商务证件', '油画风'],
-          cover: 'avatar-preview-placeholder',
-          note: text ? `风格关键词：${text}` : '默认多风格头像',
-        },
-        shareTitle: '我用 AI 生成了专属头像，快来看！',
-        shareCopy: '一键生成多风格 AI 头像，分享解锁高清无水印版',
-        unlockHint: '分享给好友解锁高清无水印 + 解锁全部风格',
-        watermarkEnabled: true,
-      }
-    case 'sticker-viral':
-      return {
-        template,
-        title: '你的专属表情包',
-        previewType: 'stickerPack',
-        previewData: {
-          theme: text || '默认主题',
-          stickers: ['开心', '加油', '无语', '比心', '震惊', '收到'],
-          count: 6,
-        },
-        shareTitle: '我做了一套搞怪表情包！',
-        shareCopy: '一句话生成整套表情包，分享到群聊解锁更多表情',
-        unlockHint: '分享到群聊解锁更多表情 + 去水印导出',
-        watermarkEnabled: true,
-      }
-    case 'pet-talk-viral':
-      return {
-        template,
-        title: '会说话的宠物视频',
-        previewType: 'petVideo',
-        previewData: {
-          line: text || '主人，该喂饭啦！',
-          duration: 8,
-          poster: 'pet-video-poster-placeholder',
-        },
-        shareTitle: '我家宠物开口说话了！',
-        shareCopy: '上传宠物照 + 一句台词，生成会说话的宠物视频',
-        unlockHint: '分享到朋友圈解锁高清视频 + 去水印',
-        watermarkEnabled: true,
-      }
-    case 'funny-video-viral':
-      return {
-        template,
-        title: '15 秒搞笑短视频脚本',
-        previewType: 'funnyStoryboard',
-        previewData: {
-          topic: text || '打工人的一天',
-          shots: [
-            { t: '0-3s', desc: '夸张开场，抛出反差设定' },
-            { t: '3-9s', desc: '冲突升级，密集笑点' },
-            { t: '9-15s', desc: '反转结尾 + 行动号召' },
-          ],
-        },
-        shareTitle: '这个搞笑脚本我能笑一年',
-        shareCopy: '输入主题秒出分镜脚本，发起接龙挑战一起拍',
-        unlockHint: '分享发起挑战解锁更多分镜模板 + 去水印',
-        watermarkEnabled: true,
-      }
-    case 'blessing-video-viral':
-      return {
-        template,
-        title: '专属祝福贺卡',
-        previewType: 'blessingCard',
-        previewData: {
-          to: input.extra?.to || '亲爱的朋友',
-          festival: input.extra?.festival || '新年',
-          message: text || '愿你新年快乐，万事如意！',
-          theme: 'festival-card-placeholder',
-        },
-        shareTitle: '送你一张专属祝福贺卡',
-        shareCopy: '填名字和祝福语，一键生成祝福贺卡群发好友',
-        unlockHint: '分享/群发解锁高清贺卡 + 去水印',
-        watermarkEnabled: true,
-      }
-    default:
-      // base / ai-tool / 其他：通用文本结果，仍保留传播闭环
-      return {
-        template,
-        title: '生成结果',
-        previewType: 'text',
-        previewData: { text: text || '这是一段示例生成结果。' },
-        shareTitle: '看看我用它生成的结果',
-        shareCopy: '一键生成，分享解锁完整高清结果',
-        unlockHint: '分享解锁高清无水印结果 + 解锁更多模板',
-        watermarkEnabled: true,
-      }
+
+  // 把用户输入浅合并进 mock 的 preview_data，让结果随输入变化（仍是本地 mock）。
+  const previewData = { ...(example.preview_data || {}) }
+  if (text) {
+    if ('note' in previewData) previewData.note = `风格关键词：${text}`
+    else if ('theme' in previewData) previewData.theme = text
+    else if ('line' in previewData) previewData.line = text
+    else if ('topic' in previewData) previewData.topic = text
+    else if ('message' in previewData) previewData.message = text
+    else if ('text' in previewData) previewData.text = text
+  }
+  if (input.extra) {
+    if (input.extra.to !== undefined) previewData.to = input.extra.to
+    if (input.extra.festival !== undefined) previewData.festival = input.extra.festival
+  }
+
+  const shareTitle = example.share_title || bp.share_hooks[0] || '看看我生成的结果'
+  const shareCopy = example.share_copy || bp.share_hooks[1] || bp.share_hooks[0] || ''
+  const unlockHint = example.unlock_hint || bp.unlock_hooks[0] || '分享解锁高清无水印结果'
+
+  return {
+    template: bp.template_id,
+    title: example.title,
+    previewType: (example.preview_type || bp.preview_type) as PreviewType,
+    previewData,
+    shareTitle,
+    shareCopy,
+    unlockHint,
+    watermarkEnabled: true,
+    inputSummary: text || (input.assetPlaceholder ? '已上传素材' : ''),
+    sourceBlueprint: bp.template_id,
+    nextActionHint: bp.unlock_hooks[0] || '分享解锁更多',
   }
 }
 
@@ -149,8 +165,22 @@ async function callRealApi(_input: GenerateInput): Promise<GeneratedResult | nul
   return null
 }
 
+// blueprint 驱动的生成入口。
+export async function generateFromBlueprint(
+  bp: Blueprint,
+  input: GenerateInput,
+): Promise<GeneratedResult> {
+  const result: GeneratedResult = {
+    id: genId(),
+    createdAt: Date.now(),
+    ...buildFromBlueprint(bp, input),
+  }
+  saveResult(result)
+  return result
+}
+
 export async function mockGenerate(input: GenerateInput): Promise<GeneratedResult> {
-  if (GENERATION_ENDPOINT) {
+  if (GENERATION_MODE === 'api' && GENERATION_ENDPOINT) {
     const real = await callRealApi(input)
     if (real) {
       saveResult(real)
@@ -159,13 +189,7 @@ export async function mockGenerate(input: GenerateInput): Promise<GeneratedResul
   }
   // 本地 mock：模拟一点生成耗时
   await new Promise((r) => setTimeout(r, 600))
-  const result: GeneratedResult = {
-    id: genId(),
-    createdAt: Date.now(),
-    ...buildMock(SELECTED_TEMPLATE, input),
-  }
-  saveResult(result)
-  return result
+  return generateFromBlueprint(loadBlueprint(), input)
 }
 
 export function saveResult(result: GeneratedResult): void {

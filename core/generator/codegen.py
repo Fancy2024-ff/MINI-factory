@@ -25,12 +25,15 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from core.generator.blueprint_builder import build_template_blueprint
+
 # token 契约（与 Node page-builder.ts 共享，必须一致）
 TOKEN_APP_NAME = "__APP_NAME__"
 TOKEN_APP_SUBTITLE = "__APP_SUBTITLE__"
 TOKEN_APP_FEATURES_JSON = "__APP_FEATURES_JSON__"
 TOKEN_APP_FEATURE_TITLE = "__APP_FEATURE_TITLE__"
 TOKEN_APP_TEMPLATE = "__APP_TEMPLATE__"
+TOKEN_APP_PREVIEW_TYPE = "__APP_PREVIEW_TYPE__"
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "src" / "templates"
 
@@ -85,6 +88,14 @@ def generate_miniapp(app: dict, prd_json: dict, output_dir: Path, template: str 
     features_cn = app.get("features_cn") or []
     feature_title = features_cn[0] if features_cn else "功能"
 
+    # --- 1c. 构建模板蓝图（template.json -> blueprint）---
+    # 蓝图基于「实际应用的模板」(overlay_applied)，而非请求模板，保证与生成项目一致。
+    # viral 模板缺 template.json 会在此抛 BlueprintError（不静默降级）。
+    blueprint = build_template_blueprint(overlay_applied, app, prd_json)
+    preview_type = blueprint["preview_type"]
+    gen_source["preview_type"] = preview_type
+    gen_source["blueprint_is_fallback"] = blueprint["is_fallback"]
+
     # --- 2. token 注入 ---
     tokens = {
         TOKEN_APP_NAME: app_name,
@@ -92,8 +103,9 @@ def generate_miniapp(app: dict, prd_json: dict, output_dir: Path, template: str 
         TOKEN_APP_FEATURES_JSON: json.dumps(features_cn, ensure_ascii=False),
         TOKEN_APP_FEATURE_TITLE: feature_title,
         TOKEN_APP_TEMPLATE: overlay_applied,
+        TOKEN_APP_PREVIEW_TYPE: preview_type,
     }
-    # index/form 填展示类 token；config/template.ts 填模板标识 token。
+    # index/form 填展示类 token；config/template.ts 填模板标识 + 预览类型 token。
     for rel in (
         "src/pages/index/index.vue",
         "src/pages/form/form.vue",
@@ -105,6 +117,14 @@ def generate_miniapp(app: dict, prd_json: dict, output_dir: Path, template: str 
             for k, v in tokens.items():
                 text = text.replace(k, v)
             _write(f, text)
+
+    # --- 2b. 写结构化蓝图到生成项目（供运行时 generation.ts 读取）---
+    # source_template_config 体积较大且是模板静态副本，运行时无需，剔除以保持精简。
+    blueprint_out = {k: v for k, v in blueprint.items() if k != "source_template_config"}
+    _write(
+        src_dir / "config" / "blueprint.json",
+        json.dumps(blueprint_out, ensure_ascii=False, indent=2),
+    )
 
     # --- 3a. package.json：deps/scripts 来自模板，仅覆盖 App 元信息 ---
     pkg = json.loads((base_template / "package.json").read_text(encoding="utf-8-sig"))

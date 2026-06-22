@@ -162,3 +162,36 @@ def test_selected_template_reflects_overlay(sample_app, sample_prd, tmp_path):
     cfg = (miniapp_dir / "src" / "config" / "template.ts").read_text(encoding="utf-8")
     assert "avatar-viral" in cfg
 
+
+# --- blueprint 接入（v2） ---
+
+def test_blueprint_json_generated(generated):
+    """生成项目必须包含 src/config/blueprint.json，含 template_id + preview_type。"""
+    miniapp_dir, _ = generated
+    bp_path = miniapp_dir / "src" / "config" / "blueprint.json"
+    assert bp_path.exists(), "缺少 src/config/blueprint.json"
+    bp = json.loads(bp_path.read_text(encoding="utf-8"))
+    assert bp.get("template_id")
+    assert bp.get("preview_type")
+
+
+def test_preview_type_injected(sample_app, sample_prd, tmp_path):
+    """template.ts 必须注入 PREVIEW_TYPE，且与 blueprint.json 一致。"""
+    miniapp_dir, _ = generate_miniapp(sample_app, sample_prd, tmp_path, template="avatar-viral")
+    cfg = (miniapp_dir / "src" / "config" / "template.ts").read_text(encoding="utf-8")
+    assert "PREVIEW_TYPE" in cfg
+    assert "__APP_PREVIEW_TYPE__" not in cfg
+    bp = json.loads((miniapp_dir / "src" / "config" / "blueprint.json").read_text(encoding="utf-8"))
+    assert f"'{bp['preview_type']}'" in cfg or f'"{bp["preview_type"]}"' in cfg
+    # avatar-viral 的 preview_type 应为 avatar
+    assert bp["preview_type"] == "avatar"
+
+
+def test_generation_service_blueprint_driven(generated):
+    """generation.ts 必须支持 blueprint 驱动（loadBlueprint + generateFromBlueprint）。"""
+    miniapp_dir, _ = generated
+    svc = (miniapp_dir / "src" / "services" / "generation.ts").read_text(encoding="utf-8")
+    assert "loadBlueprint" in svc, "generation.ts 缺少 loadBlueprint"
+    assert "generateFromBlueprint" in svc, "generation.ts 缺少 generateFromBlueprint"
+    assert "blueprint.json" in svc, "generation.ts 未引用 blueprint.json"
+

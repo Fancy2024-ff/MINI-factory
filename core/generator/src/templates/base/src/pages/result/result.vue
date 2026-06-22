@@ -37,6 +37,10 @@
           <text class="preview-note">致 {{ result.previewData.to }}（{{ result.previewData.festival }}）</text>
           <text class="card-msg">{{ result.previewData.message }}</text>
         </block>
+        <block v-else-if="result.previewType === 'image'">
+          <view class="image-frame"><text class="image-ph">图片预览（占位）</text></view>
+          <text class="preview-note" v-if="result.previewData.prompt">描述：{{ result.previewData.prompt }}</text>
+        </block>
         <block v-else>
           <text class="preview-note">{{ result.previewData.text }}</text>
         </block>
@@ -119,6 +123,8 @@ function goHome() {
 .shot-t { font-size: 24rpx; color: #0071e3; width: 120rpx; }
 .shot-d { font-size: 26rpx; color: #333; flex: 1; }
 .card-msg { font-size: 30rpx; color: #d4380d; display: block; margin-top: 12rpx; }
+.image-frame { width: 100%; height: 320rpx; border-radius: 12rpx; background: #ebebf0; border: 2rpx dashed #b0b0c0; display: flex; align-items: center; justify-content: center; margin-bottom: 12rpx; }
+.image-ph { font-size: 26rpx; color: #8a8a9a; }
 .watermark { margin-top: 16rpx; font-size: 22rpx; color: #b0b0b0; }
 .share-box { background: #fff7e6; border-radius: 12rpx; padding: 20rpx; margin-bottom: 24rpx; }
 .share-title { font-size: 28rpx; font-weight: 600; color: #d46b08; display: block; }

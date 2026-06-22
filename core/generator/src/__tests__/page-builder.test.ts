@@ -180,10 +180,38 @@ describe("generateProject (ai-tool)", () => {
     // 模板配置注入真实 selected template，无残留 token
     const cfg = await fs.readFile(path.join(p, "src/config/template.ts"), "utf-8");
     expect(cfg).not.toContain("__APP_TEMPLATE__");
+    expect(cfg).not.toContain("__APP_PREVIEW_TYPE__");
     expect(cfg).toContain("avatar-viral");
+    expect(cfg).toContain("PREVIEW_TYPE");
     // form 调用 mockGenerate
     const form = await fs.readFile(path.join(p, "src/pages/form/form.vue"), "utf-8");
     expect(form).toContain("mockGenerate");
+  });
+
+  // v2: blueprint 接入（template.json -> blueprint.json）与 Python codegen parity。
+  it("writes blueprint.json and keeps generation.ts blueprint-driven", async () => {
+    const res = await generateProject(prd, "avatar-viral");
+    const p = res.project_path;
+    // blueprint.json 写入，template_id / preview_type 正确
+    const bpPath = path.join(p, "src/config/blueprint.json");
+    expect(await fs.pathExists(bpPath), "missing src/config/blueprint.json").toBe(true);
+    const bp = await fs.readJSON(bpPath);
+    expect(bp.template_id).toBe("avatar-viral");
+    expect(bp.preview_type).toBe("avatar");
+    expect(bp.is_fallback).toBe(false);
+    // generation.ts 支持 blueprint 驱动
+    const svc = await fs.readFile(path.join(p, "src/services/generation.ts"), "utf-8");
+    expect(svc).toContain("loadBlueprint");
+    expect(svc).toContain("generateFromBlueprint");
+  });
+
+  // v2: 兜底模板（ai-tool）无 template.json -> fallback blueprint（preview_type text）。
+  it("falls back to a text blueprint for templates without template.json", async () => {
+    const res = await generateProject(prd, "ai-tool");
+    const p = res.project_path;
+    const bp = await fs.readJSON(path.join(p, "src/config/blueprint.json"));
+    expect(bp.preview_type).toBe("text");
+    expect(bp.is_fallback).toBe(true);
   });
 });
 
