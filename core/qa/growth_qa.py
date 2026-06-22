@@ -35,8 +35,75 @@ def _scan_generated(miniapp_dir: Path, words: list[str]) -> bool:
     return False
 
 
+def _read(p: Path) -> str:
+    try:
+        return p.read_text(encoding="utf-8-sig")
+    except Exception:
+        return ""
+
+
+def _check_generation_flow(miniapp_dir: Path, checks: dict, issues: list[str]) -> None:
+    """检查生成项目的交互闭环结构（generation service / result / form / 模板感知）。
+
+    用结构关键词判断（mockGenerate / GeneratedResult / shareTitle 等），
+    不只扫中文，避免英文文案模板漏判。
+    """
+    src = miniapp_dir / "src"
+    service = src / "services" / "generation.ts"
+    result_page = src / "pages" / "result" / "result.vue"
+    form_page = src / "pages" / "form" / "form.vue"
+    tmpl_cfg = src / "config" / "template.ts"
+
+    service_txt = _read(service)
+    result_txt = _read(result_page)
+    form_txt = _read(form_page)
+    tmpl_txt = _read(tmpl_cfg)
+
+    # 1. 统一生成服务存在且定义核心契约
+    service_ok = bool(service_txt) and "mockGenerate" in service_txt and "GeneratedResult" in service_txt
+    checks["generation_service_exists"] = service_ok
+    if not service_ok:
+        issues.append("缺少统一生成服务 src/services/generation.ts（mockGenerate/GeneratedResult）")
+
+    # 2. 结果页存在
+    checks["result_page_exists"] = bool(result_txt)
+    if not result_txt:
+        issues.append("缺少结果页 src/pages/result/result.vue")
+
+    # 3. 结果页含分享 CTA + 解锁钩子 + 水印/去水印逻辑
+    result_share = ("open-type=\"share\"" in result_txt) or ("shareTitle" in result_txt) or ("分享" in result_txt)
+    result_unlock = ("unlock" in result_txt.lower()) or ("解锁" in result_txt) or ("unlockHint" in result_txt)
+    result_watermark = ("watermark" in result_txt.lower()) or ("水印" in result_txt)
+    checks["result_has_share_cta"] = result_share
+    checks["result_has_unlock_hook"] = result_unlock
+    checks["result_has_watermark"] = result_watermark
+    if not result_share:
+        issues.append("结果页缺少分享 CTA")
+    if not result_unlock:
+        issues.append("结果页缺少解锁钩子（unlock/解锁/unlockHint）")
+    if not result_watermark:
+        issues.append("结果页缺少水印/去水印逻辑（watermark/水印）")
+
+    # 4. form 调用 generation service
+    form_calls = "mockGenerate" in form_txt
+    checks["form_calls_generation"] = form_calls
+    if not form_calls:
+        issues.append("form 页未调用 mockGenerate")
+
+    # 5. 模板感知 mock：服务含 SELECTED_TEMPLATE/template 分支 + shareTitle/shareCopy/unlockHint/watermarkEnabled
+    template_aware = ("SELECTED_TEMPLATE" in service_txt or "SELECTED_TEMPLATE" in tmpl_txt) and (
+        "switch" in service_txt or "template" in service_txt.lower()
+    )
+    contract_fields = all(
+        k in service_txt for k in ("shareTitle", "shareCopy", "unlockHint", "watermarkEnabled")
+    )
+    checks["generation_template_aware"] = template_aware and contract_fields
+    if not (template_aware and contract_fields):
+        issues.append("生成服务缺少 template-aware mock 逻辑或结果契约字段")
+
+
 def run_growth_qa(output_dir: Path, miniapp_dir: Path | None = None) -> dict:
-    """检查 growth 产物完整性、关键要素，以及生成代码的传播链路。"""
+    """检查 growth 产物完整性、关键要素，以及生成代码的传播+交互闭环。"""
     issues: list[str] = []
     checks: dict = {}
 
@@ -93,6 +160,9 @@ def run_growth_qa(output_dir: Path, miniapp_dir: Path | None = None) -> dict:
             issues.append("生成代码未发现解锁/裂变机制预留")
         if not has_result:
             issues.append("生成代码未发现可传播结果页")
+
+        # 5. 生成项目的交互闭环结构（generation service / result / form / 模板感知）
+        _check_generation_flow(miniapp_dir, checks, issues)
 
     passed = all(checks.values())
     return {"passed": passed, "checks": checks, "issues": issues}

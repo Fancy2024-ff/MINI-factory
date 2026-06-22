@@ -20,11 +20,36 @@ def _make_growth_artifacts(output_dir: Path):
 
 
 def _make_miniapp_with_propagation(miniapp_dir: Path):
-    pages = miniapp_dir / "src" / "pages"
-    (pages / "result").mkdir(parents=True, exist_ok=True)
-    (pages / "result" / "result.vue").write_text(
-        "<template><button @click=\"share\">保存并分享</button>"
-        "<text>分享解锁高清，邀请好友去水印</text></template>",
+    """构造一个含完整交互闭环结构的生成项目（service + config + form + result）。"""
+    src = miniapp_dir / "src"
+    (src / "services").mkdir(parents=True, exist_ok=True)
+    (src / "config").mkdir(parents=True, exist_ok=True)
+    (src / "pages" / "result").mkdir(parents=True, exist_ok=True)
+    (src / "pages" / "form").mkdir(parents=True, exist_ok=True)
+
+    (src / "config" / "template.ts").write_text(
+        "export const SELECTED_TEMPLATE = 'avatar-viral'\n", encoding="utf-8"
+    )
+    (src / "services" / "generation.ts").write_text(
+        "import { SELECTED_TEMPLATE } from '../config/template'\n"
+        "export interface GeneratedResult { id: string; template: string; "
+        "shareTitle: string; shareCopy: string; unlockHint: string; watermarkEnabled: boolean }\n"
+        "export async function mockGenerate(input: any): Promise<GeneratedResult> {\n"
+        "  switch (SELECTED_TEMPLATE) { default: return { id: 'x', template: SELECTED_TEMPLATE, "
+        "shareTitle: 's', shareCopy: 'c', unlockHint: 'u', watermarkEnabled: true } }\n}\n",
+        encoding="utf-8",
+    )
+    (src / "pages" / "form" / "form.vue").write_text(
+        "<template><button @click=\"go\">生成</button></template>"
+        "<script setup lang=\"ts\">import { mockGenerate } from '../../services/generation'\n"
+        "async function go(){ await mockGenerate({}) }</script>",
+        encoding="utf-8",
+    )
+    (src / "pages" / "result" / "result.vue").write_text(
+        "<template><button open-type=\"share\">分享作品</button>"
+        "<button @click=\"u\">分享解锁高清/去水印</button>"
+        "<text>watermark 水印 邀请好友</text></template>"
+        "<script setup lang=\"ts\">function u(){}</script>",
         encoding="utf-8",
     )
 
@@ -42,6 +67,56 @@ def test_growth_qa_passes_with_propagation_chain(tmp_path):
     assert result["checks"]["code_has_share_cta"] is True
     assert result["checks"]["code_has_unlock_hook"] is True
     assert result["checks"]["code_has_result_page"] is True
+    # P1 新增结构检查
+    assert result["checks"]["generation_service_exists"] is True
+    assert result["checks"]["form_calls_generation"] is True
+    assert result["checks"]["result_has_share_cta"] is True
+    assert result["checks"]["result_has_unlock_hook"] is True
+    assert result["checks"]["result_has_watermark"] is True
+    assert result["checks"]["generation_template_aware"] is True
+
+
+def test_growth_qa_fails_without_generation_service(tmp_path):
+    """缺统一生成服务 / form 不调用 mockGenerate 时，GrowthQA 必须失败。"""
+    out = tmp_path / "out"
+    out.mkdir()
+    mini = tmp_path / "mini"
+    pages = mini / "src" / "pages" / "result"
+    pages.mkdir(parents=True)
+    # 有传播文案的结果页，但没有 generation service / form / config
+    (pages / "result.vue").write_text(
+        "<template><button open-type=\"share\">分享</button>"
+        "<text>解锁 watermark 水印</text></template>",
+        encoding="utf-8",
+    )
+    _make_growth_artifacts(out)
+
+    result = run_growth_qa(out, miniapp_dir=mini)
+    assert result["checks"]["generation_service_exists"] is False
+    assert result["checks"]["form_calls_generation"] is False
+    assert not result["passed"]
+    assert any("generation" in i for i in result["issues"])
+
+
+def test_growth_qa_fails_when_result_lacks_unlock_and_watermark(tmp_path):
+    """有 service/form，但结果页缺解锁/水印钩子时，GrowthQA 必须失败。"""
+    out = tmp_path / "out"
+    out.mkdir()
+    mini = tmp_path / "mini"
+    _make_miniapp_with_propagation(mini)
+    # 退化结果页：只剩分享，去掉解锁/水印
+    (mini / "src" / "pages" / "result" / "result.vue").write_text(
+        "<template><button open-type=\"share\">分享作品</button></template>"
+        "<script setup lang=\"ts\"></script>",
+        encoding="utf-8",
+    )
+    _make_growth_artifacts(out)
+
+    result = run_growth_qa(out, miniapp_dir=mini)
+    assert result["checks"]["result_has_share_cta"] is True
+    assert result["checks"]["result_has_unlock_hook"] is False
+    assert result["checks"]["result_has_watermark"] is False
+    assert not result["passed"]
 
 
 def test_growth_qa_flags_missing_propagation(tmp_path):

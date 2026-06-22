@@ -165,4 +165,25 @@ describe("generateProject (ai-tool)", () => {
       expect(idx).toContain(prd.app_name);
     });
   }
+
+  // P1: 生成项目交互闭环结构（generation service + 模板配置 + 模板 token 注入）。
+  it("ships the generation service and injects selected template", async () => {
+    const res = await generateProject(prd, "avatar-viral");
+    const p = res.project_path;
+    // 统一生成服务存在且含契约
+    const svcPath = path.join(p, "src/services/generation.ts");
+    expect(await fs.pathExists(svcPath), "missing src/services/generation.ts").toBe(true);
+    const svc = await fs.readFile(svcPath, "utf-8");
+    for (const token of ["mockGenerate", "GeneratedResult", "shareTitle", "unlockHint", "watermarkEnabled"]) {
+      expect(svc.includes(token), `generation.ts missing ${token}`).toBe(true);
+    }
+    // 模板配置注入真实 selected template，无残留 token
+    const cfg = await fs.readFile(path.join(p, "src/config/template.ts"), "utf-8");
+    expect(cfg).not.toContain("__APP_TEMPLATE__");
+    expect(cfg).toContain("avatar-viral");
+    // form 调用 mockGenerate
+    const form = await fs.readFile(path.join(p, "src/pages/form/form.vue"), "utf-8");
+    expect(form).toContain("mockGenerate");
+  });
 });
+

@@ -89,6 +89,19 @@ const growthSummary = computed(() => {
   return ''
 })
 
+// 生成交互闭环 + 传播链路摘要（来自 growth-qa-report.json 的结构检查）
+const generationFlowSummary = computed(() => {
+  const g: any = props.job?.artifacts?.['growth-qa-report.json']
+  if (!g?.checks) return ''
+  const c = g.checks
+  const flowOk = c.generation_service_exists && c.form_calls_generation && c.generation_template_aware
+  const chainOk = c.result_has_share_cta && c.result_has_unlock_hook && c.result_has_watermark
+  if (flowOk && chainOk) return '生成闭环 + 传播链路就绪'
+  if (flowOk) return '生成闭环就绪，传播链路待补'
+  if (chainOk) return '传播链路就绪，生成闭环待补'
+  return '生成闭环未就绪'
+})
+
 const statusSummary = computed(() => {
   if (!props.job) return '等待启动任务'
   const readiness = props.job.artifacts?.['submission-readiness-report.json']
@@ -141,6 +154,10 @@ const statusSummary = computed(() => {
       <div class="status-item" v-if="growthSummary">
         <span class="status-label">增长</span>
         <span class="status-value">{{ growthSummary }}</span>
+      </div>
+      <div class="status-item" v-if="generationFlowSummary">
+        <span class="status-label">闭环</span>
+        <span class="status-value">{{ generationFlowSummary }}</span>
       </div>
       <div class="status-item">
         <span class="status-label">进度</span>

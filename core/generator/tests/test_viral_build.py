@@ -50,6 +50,13 @@ def test_viral_template_real_build(template, sig_page):
 
         assert gen_source["template"] == template, "模板未被选中"
         assert gen_source["fallback_used"] is False
+        # token 契约必须完全替换：生成项目无 __APP_ 残留（含 config/template.ts）
+        for f in miniapp_dir.rglob("*"):
+            if f.is_file() and f.suffix in (".vue", ".json", ".ts", ".md", ".html"):
+                if "node_modules" in str(f) or "dist" in str(f):
+                    continue
+                assert "__APP_" not in f.read_text(encoding="utf-8-sig"), \
+                    f"unfilled token in {f.relative_to(miniapp_dir)}"
         # 签名页源码存在
         assert (miniapp_dir / "src" / "pages" / sig_page / f"{sig_page}.vue").exists()
         # 签名页已注册进 pages.json（否则不会被编译进 dist）

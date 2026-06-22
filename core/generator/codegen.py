@@ -30,6 +30,7 @@ TOKEN_APP_NAME = "__APP_NAME__"
 TOKEN_APP_SUBTITLE = "__APP_SUBTITLE__"
 TOKEN_APP_FEATURES_JSON = "__APP_FEATURES_JSON__"
 TOKEN_APP_FEATURE_TITLE = "__APP_FEATURE_TITLE__"
+TOKEN_APP_TEMPLATE = "__APP_TEMPLATE__"
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "src" / "templates"
 
@@ -90,8 +91,14 @@ def generate_miniapp(app: dict, prd_json: dict, output_dir: Path, template: str 
         TOKEN_APP_SUBTITLE: app["description_cn"][:40],
         TOKEN_APP_FEATURES_JSON: json.dumps(features_cn, ensure_ascii=False),
         TOKEN_APP_FEATURE_TITLE: feature_title,
+        TOKEN_APP_TEMPLATE: overlay_applied,
     }
-    for rel in ("src/pages/index/index.vue", "src/pages/form/form.vue"):
+    # index/form 填展示类 token；config/template.ts 填模板标识 token。
+    for rel in (
+        "src/pages/index/index.vue",
+        "src/pages/form/form.vue",
+        "src/config/template.ts",
+    ):
         f = miniapp_dir / rel
         if f.exists():
             text = f.read_text(encoding="utf-8")

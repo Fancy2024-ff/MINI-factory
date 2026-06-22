@@ -162,8 +162,13 @@ export async function generateProject(
     __APP_SUBTITLE__: (prd.summary || "").slice(0, 40),
     __APP_FEATURES_JSON__: JSON.stringify(featureNames),
     __APP_FEATURE_TITLE__: featureNames[0] || "功能",
+    __APP_TEMPLATE__: selected,
   };
-  for (const rel of ["pages/index/index.vue", "pages/form/form.vue"]) {
+  for (const rel of [
+    "pages/index/index.vue",
+    "pages/form/form.vue",
+    "config/template.ts",
+  ]) {
     const f = path.join(srcDir, rel);
     if (await fs.pathExists(f)) {
       let text = await fs.readFile(f, "utf-8");

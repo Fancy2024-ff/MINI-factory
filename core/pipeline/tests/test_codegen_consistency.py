@@ -113,3 +113,52 @@ def test_all_generated_text_is_clean_utf8(generated):
                 raw = raw[3:]
             text = raw.decode("utf-8")  # raises on non-UTF-8
             assert "�" not in text, f"replacement char in {f.name}"
+
+
+# --- 生成项目交互闭环结构（P1） ---
+
+def test_generation_service_present(generated):
+    """生成项目必须包含统一生成服务，定义 mockGenerate + GeneratedResult 契约。"""
+    miniapp_dir, _ = generated
+    svc = miniapp_dir / "src" / "services" / "generation.ts"
+    assert svc.exists(), "缺少 src/services/generation.ts"
+    txt = svc.read_text(encoding="utf-8")
+    for token in ("mockGenerate", "GeneratedResult", "shareTitle", "shareCopy",
+                  "unlockHint", "watermarkEnabled"):
+        assert token in txt, f"generation.ts 缺少契约 {token}"
+
+
+def test_selected_template_injected(generated):
+    """src/config/template.ts 必须注入真实 selected_template（默认 base）。"""
+    miniapp_dir, gen_source = generated
+    cfg = miniapp_dir / "src" / "config" / "template.ts"
+    assert cfg.exists(), "缺少 src/config/template.ts"
+    txt = cfg.read_text(encoding="utf-8")
+    assert "__APP_TEMPLATE__" not in txt, "模板 token 未替换"
+    assert f"'{gen_source['template']}'" in txt or f'"{gen_source["template"]}"' in txt, \
+        f"template.ts 未反映 selected_template={gen_source['template']}"
+
+
+def test_form_calls_generation_service(generated):
+    """form 页必须调用 generation service 的 mockGenerate。"""
+    miniapp_dir, _ = generated
+    form = (miniapp_dir / "src" / "pages" / "form" / "form.vue").read_text(encoding="utf-8")
+    assert "mockGenerate" in form, "form.vue 未调用 mockGenerate"
+
+
+def test_result_page_has_share_unlock_watermark(generated):
+    """result 页必须含分享 CTA + 解锁钩子 + 水印逻辑。"""
+    miniapp_dir, _ = generated
+    result = (miniapp_dir / "src" / "pages" / "result" / "result.vue").read_text(encoding="utf-8")
+    assert "open-type=\"share\"" in result or "shareTitle" in result, "result.vue 缺少分享 CTA"
+    assert "unlock" in result.lower() or "解锁" in result, "result.vue 缺少解锁钩子"
+    assert "watermark" in result.lower() or "水印" in result, "result.vue 缺少水印逻辑"
+
+
+def test_selected_template_reflects_overlay(sample_app, sample_prd, tmp_path):
+    """指定 avatar-viral 时，template.ts 必须反映该模板（template-aware mock 依赖它）。"""
+    miniapp_dir, gen_source = generate_miniapp(sample_app, sample_prd, tmp_path, template="avatar-viral")
+    assert gen_source["template"] == "avatar-viral"
+    cfg = (miniapp_dir / "src" / "config" / "template.ts").read_text(encoding="utf-8")
+    assert "avatar-viral" in cfg
+
