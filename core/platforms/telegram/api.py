@@ -65,6 +65,25 @@ class TelegramClient:
             payload["reply_markup"] = reply_markup
         return self._call("sendMessage", payload)
 
+    def edit_message_text(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        text: str,
+    ) -> dict[str, Any]:
+        """编辑既有消息文本（用于进度条推进）。"""
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+        }
+        return self._call("editMessageText", payload)
+
+    def delete_message(self, chat_id: int | str, message_id: int) -> dict[str, Any]:
+        """删除既有消息（用于出图前移除进度条）。"""
+        payload: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id}
+        return self._call("deleteMessage", payload)
+
     def send_photo_bytes(
         self,
         chat_id: int | str,

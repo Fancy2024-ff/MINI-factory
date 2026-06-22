@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
+import threading
 from typing import Any, Callable
 
 from core.integrations.image_generation import ImageGenerationError, generate_image
@@ -22,6 +23,28 @@ from core.platforms.telegram.api import TelegramAPIError, TelegramClient
 logger = logging.getLogger("telegram.bot")
 
 MAX_PROMPT_LEN = 1000
+
+# 进度条：provider 不回传真实进度，这里按经验时长「模拟推进」，封顶 90%，
+# 真实出图成功才视作 100%（删进度条→发图）。每档之间 sleep PROGRESS_INTERVAL 秒。
+PROGRESS_INTERVAL = 3.5
+# (百分比, 已填格数/共5格) — 文案用方块条直观表达
+PROGRESS_STEPS = [
+    (15, 1),
+    (35, 2),
+    (55, 3),
+    (75, 4),
+    (90, 5),
+]
+
+
+def _progress_text(percent: int, filled: int) -> str:
+    bar = "▰" * filled + "▱" * (5 - filled)
+    return f"🎨 生成中 {bar} {percent}%"
+
+
+def _initial_progress_text() -> str:
+    percent, filled = PROGRESS_STEPS[0]
+    return _progress_text(percent, filled)
 
 START_TEXT = (
     "👋 欢迎使用 AI 图片生成 Bot！\n\n"
@@ -122,8 +145,10 @@ def handle_update(
     *,
     generate: Callable[..., dict[str, Any]] = generate_image,
     webapp_url: str | None = None,
+    progress_interval: float = PROGRESS_INTERVAL,
 ) -> None:
-    """处理单条 Telegram update。generate / webapp_url 可注入，便于测试 mock。"""
+    """处理单条 Telegram update。generate / webapp_url 可注入，便于测试 mock。
+    progress_interval 控制进度条推进间隔（测试可调小以免真等数秒）。"""
     resolved_webapp = _resolve_webapp_url(webapp_url)
     # 回调按钮：第一版只确认，不重跑核心链路。
     callback = update.get("callback_query")
@@ -158,7 +183,7 @@ def handle_update(
             return
         # 用 avatar adapter 把人物描述改写为头像出图 prompt，再走统一生成回复。
         avatar_prompt = build_avatar_prompt({"prompt": subject})
-        _generate_and_reply(client, chat_id, avatar_prompt, generate, resolved_webapp)
+        _generate_and_reply(client, chat_id, avatar_prompt, generate, resolved_webapp, progress_interval)
         return
 
     prompt, is_command = extract_prompt(stripped)
@@ -176,7 +201,7 @@ def handle_update(
         client.send_message(chat_id, TOO_LONG_HINT)
         return
 
-    _generate_and_reply(client, chat_id, prompt, generate, resolved_webapp)
+    _generate_and_reply(client, chat_id, prompt, generate, resolved_webapp, progress_interval)
 
 
 def _handle_callback(client: TelegramClient, callback: dict[str, Any]) -> None:
@@ -197,24 +222,82 @@ def _handle_callback(client: TelegramClient, callback: dict[str, Any]) -> None:
             pass
 
 
+def _run_progress(
+    client: TelegramClient,
+    chat_id: int | str,
+    message_id: int,
+    stop: threading.Event,
+    interval: float,
+) -> None:
+    """后台推进进度条：依次编辑进度消息到 35/55/75/90%，到顶或被叫停即退出。
+
+    任何编辑失败（消息已删/网络抖动）都静默跳过，绝不影响主出图流程。
+    """
+    for percent, filled in PROGRESS_STEPS[1:]:
+        if stop.wait(interval):  # 被叫停则立即退出
+            return
+        try:
+            client.edit_message_text(chat_id, message_id, _progress_text(percent, filled))
+        except Exception:
+            # 进度只是体验增强，失败不打断生成；不记录 provider/token 细节
+            return
+
+
 def _generate_and_reply(
     client: TelegramClient,
     chat_id: int | str,
     prompt: str,
     generate: Callable[..., dict[str, Any]],
     webapp_url: str = "",
+    progress_interval: float = PROGRESS_INTERVAL,
 ) -> None:
+    # 1. 先发进度条消息，拿到 message_id 供后续编辑/删除
+    progress_message_id: int | None = None
+    try:
+        sent = client.send_message(chat_id, _initial_progress_text())
+        progress_message_id = sent.get("message_id")
+    except TelegramAPIError:
+        progress_message_id = None  # 发不出进度条也不阻断生成
+
+    # 2. 起后台线程推进进度（仅在有进度消息时）
+    stop = threading.Event()
+    progress_thread: threading.Thread | None = None
+    if progress_message_id is not None:
+        progress_thread = threading.Thread(
+            target=_run_progress,
+            args=(client, chat_id, progress_message_id, stop, progress_interval),
+            name="tg-progress",
+            daemon=True,
+        )
+        progress_thread.start()
+
+    def _cleanup_progress() -> None:
+        """停进度线程并删掉进度条消息（成功/失败都要调用）。"""
+        stop.set()
+        if progress_thread is not None:
+            progress_thread.join(timeout=5)
+        if progress_message_id is not None:
+            try:
+                client.delete_message(chat_id, progress_message_id)
+            except Exception:
+                pass  # 删不掉也不影响结果发送
+
+    # 3. 同步生成（阻塞）
     try:
         result = generate(prompt)
     except ImageGenerationError as err:
-        # 只记录稳定 code，不记录 prompt 细节之外的 provider 原文
         logger.info("image generation failed: code=%s", err.code)
+        _cleanup_progress()
         client.send_message(chat_id, _friendly_error(err))
         return
     except Exception:
         logger.info("image generation unexpected error")
+        _cleanup_progress()
         client.send_message(chat_id, PROVIDER_FAILED_HINT)
         return
+
+    # 4. 生成成功：停进度、删进度条，再发图
+    _cleanup_progress()
 
     image_b64 = result.get("image_base64")
     image_url = result.get("image_url")
