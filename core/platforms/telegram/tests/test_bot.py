@@ -178,3 +178,64 @@ def test_client_requires_token():
 
     with pytest.raises(TelegramAPIError):
         TelegramClient("")
+
+
+# --- WebApp 联动 -----------------------------------------------------------
+
+WEBAPP_URL = "https://example.org/tg"
+
+
+def _find_buttons(markup):
+    if not markup:
+        return []
+    return [btn for row in markup.get("inline_keyboard", []) for btn in row]
+
+
+def test_start_has_webapp_button_when_url_set():
+    c = FakeClient()
+    bot_mod.handle_update(c, _msg_update("/start"), webapp_url=WEBAPP_URL)
+    assert len(c.messages) == 1
+    _, _, markup = c.messages[0]
+    buttons = _find_buttons(markup)
+    web_app_btns = [b for b in buttons if "web_app" in b]
+    assert web_app_btns, "/start 应带 web_app 按钮"
+    assert web_app_btns[0]["web_app"]["url"] == WEBAPP_URL
+
+
+def test_start_degrades_without_webapp_url():
+    c = FakeClient()
+    # 显式空字符串：无 https url，按钮降级为 callback，不崩
+    bot_mod.handle_update(c, _msg_update("/start"), webapp_url="")
+    assert len(c.messages) == 1
+    _, _, markup = c.messages[0]
+    buttons = _find_buttons(markup)
+    assert buttons, "降级时仍应有按钮"
+    assert all("web_app" not in b for b in buttons), "无 url 时不应出现 web_app 按钮"
+    assert any(b.get("callback_data") == "open_hint" for b in buttons)
+
+
+def test_start_rejects_non_https_webapp_url():
+    c = FakeClient()
+    bot_mod.handle_update(c, _msg_update("/start"), webapp_url="http://insecure.example/tg")
+    _, _, markup = c.messages[0]
+    buttons = _find_buttons(markup)
+    assert all("web_app" not in b for b in buttons), "非 https 不应作为 web_app 按钮"
+
+
+def test_image_result_has_webapp_and_regen_buttons():
+    c = FakeClient()
+    bot_mod.handle_update(c, _msg_update("/image 猫"), generate=_ok_base64, webapp_url=WEBAPP_URL)
+    assert len(c.photos_bytes) == 1
+    _, _, _, markup = c.photos_bytes[0]
+    buttons = _find_buttons(markup)
+    assert any("web_app" in b for b in buttons), "结果按钮应含 WebApp 入口"
+    assert any(b.get("callback_data") == "regen" for b in buttons), "结果按钮应含再生成"
+
+
+def test_image_result_buttons_degrade_without_url():
+    c = FakeClient()
+    bot_mod.handle_update(c, _msg_update("/image 猫"), generate=_ok_base64, webapp_url="")
+    _, _, _, markup = c.photos_bytes[0]
+    buttons = _find_buttons(markup)
+    assert all("web_app" not in b for b in buttons)
+    assert any(b.get("callback_data") == "regen" for b in buttons)
