@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config'
+import vue from '@vitejs/plugin-vue'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
 
@@ -10,8 +11,11 @@ const projectRoot = dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
   root: projectRoot,
+  // 加载 vue 插件以支持 .vue 组件渲染测试（TG WebApp 页面）。
+  plugins: [vue()],
   test: {
     root: projectRoot,
+    // 默认 node（逻辑测试）；需要 DOM 的用例在文件首行用 // @vitest-environment jsdom。
     environment: 'node',
     include: ['src/**/*.{test,spec}.{ts,js}'],
     watch: false,

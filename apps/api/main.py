@@ -746,18 +746,28 @@ def generate_image_endpoint(req: ImageGenerationRequest):
         result = generate_image(prompt, style=req.style, aspect_ratio=req.aspect_ratio)
     except ImageGenerationError as e:
         # 只回稳定 code + 安全 message，不暴露 provider 原始信息。
-        return {"ok": False, "error": {"code": e.code, "message": e.message}}
+        # retryable：瞬时类错误（超时/网络/provider 暂时失败）可重试，配置类不可。
+        retryable = e.code in {
+            "IMAGE_GENERATION_TIMEOUT",
+            "IMAGE_GENERATION_PROVIDER_FAILED",
+        }
+        return {"ok": False, "error": {"code": e.code, "message": e.message, "retryable": retryable}}
     except Exception:
-        return {"ok": False, "error": {"code": ERR_FAILED, "message": "图片生成失败，请稍后重试"}}
+        return {"ok": False, "error": {"code": ERR_FAILED, "message": "图片生成失败，请稍后重试", "retryable": True}}
+
+    import time as _t
 
     return {
         "ok": True,
         "result": {
             "preview_type": "image",
+            "title": "AI 图片生成",
+            "caption": prompt[:60],
             "image_url": result.get("image_url"),
             "image_base64": result.get("image_base64"),
             "prompt": result.get("prompt"),
             "provider": result.get("provider"),
+            "created_at": int(_t.time()),
             "metadata": result.get("metadata", {}),
         },
     }
