@@ -50,20 +50,47 @@ DECODE_FAILED_HINT = "图片生成结果异常，请稍后再试。"
 _NOT_CONFIGURED_CODES = {"IMAGE_GENERATION_NOT_CONFIGURED"}
 
 
-def build_growth_keyboard() -> dict[str, Any]:
-    """返回图片后的增长 inline 按钮。第一版部分按钮为 callback skeleton。"""
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "🔄 再生成", "callback_data": "regen"},
-                {"text": "🎨 换风格", "callback_data": "restyle"},
-            ],
-            [
-                {"text": "✨ 生成同款", "callback_data": "variant"},
-                {"text": "❓ 帮助", "callback_data": "help"},
-            ],
-        ]
-    }
+def _resolve_webapp_url(webapp_url: str | None) -> str:
+    """显式传入优先；否则从 config（env）读。仅接受 https。"""
+    if webapp_url is None:
+        from core.runtime import config
+
+        webapp_url = config.TELEGRAM_WEBAPP_URL
+    webapp_url = (webapp_url or "").strip()
+    return webapp_url if webapp_url.startswith("https://") else ""
+
+
+def _open_button(webapp_url: str) -> dict[str, Any]:
+    """构造「打开 MiniForge」按钮：有 https webapp url 用 web_app，否则降级文本回调。"""
+    if webapp_url:
+        return {"text": "🚀 打开 MiniForge", "web_app": {"url": webapp_url}}
+    return {"text": "🚀 打开 MiniForge", "callback_data": "open_hint"}
+
+
+def build_start_keyboard(webapp_url: str = "") -> dict[str, Any]:
+    """/start 的按钮：打开 WebApp（或降级提示）。"""
+    return {"inline_keyboard": [[_open_button(webapp_url)]]}
+
+
+def build_growth_keyboard(webapp_url: str = "") -> dict[str, Any]:
+    """返回图片后的增长 inline 按钮。第一版部分按钮为 callback skeleton。
+
+    第一行加入 WebApp 入口（配置了 https url 时）与「再生成」。
+    """
+    rows: list[list[dict[str, Any]]] = [
+        [
+            _open_button(webapp_url),
+            {"text": "🔄 再生成", "callback_data": "regen"},
+        ],
+        [
+            {"text": "🎨 换风格", "callback_data": "restyle"},
+            {"text": "✨ 生成同款", "callback_data": "variant"},
+        ],
+        [
+            {"text": "❓ 帮助", "callback_data": "help"},
+        ],
+    ]
+    return {"inline_keyboard": rows}
 
 
 def extract_prompt(text: str) -> tuple[str, bool]:
@@ -91,8 +118,10 @@ def handle_update(
     update: dict[str, Any],
     *,
     generate: Callable[..., dict[str, Any]] = generate_image,
+    webapp_url: str | None = None,
 ) -> None:
-    """处理单条 Telegram update。generate 可注入，便于测试 mock。"""
+    """处理单条 Telegram update。generate / webapp_url 可注入，便于测试 mock。"""
+    resolved_webapp = _resolve_webapp_url(webapp_url)
     # 回调按钮：第一版只确认，不重跑核心链路。
     callback = update.get("callback_query")
     if isinstance(callback, dict):
@@ -110,11 +139,8 @@ def handle_update(
 
     # 命令分发
     stripped = text.strip()
-    if stripped in ("/start", "/start@"):
-        client.send_message(chat_id, START_TEXT)
-        return
     if stripped.startswith("/start"):
-        client.send_message(chat_id, START_TEXT)
+        client.send_message(chat_id, START_TEXT, reply_markup=build_start_keyboard(resolved_webapp))
         return
     if stripped.startswith("/help"):
         client.send_message(chat_id, HELP_TEXT)
@@ -135,17 +161,19 @@ def handle_update(
         client.send_message(chat_id, TOO_LONG_HINT)
         return
 
-    _generate_and_reply(client, chat_id, prompt, generate)
+    _generate_and_reply(client, chat_id, prompt, generate, resolved_webapp)
 
 
 def _handle_callback(client: TelegramClient, callback: dict[str, Any]) -> None:
     data = callback.get("data") or ""
     cb_id = callback.get("id") or ""
-    if data == "help":
-        msg = callback.get("message") or {}
-        chat_id = (msg.get("chat") or {}).get("id")
-        if chat_id is not None:
-            client.send_message(chat_id, HELP_TEXT)
+    msg = callback.get("message") or {}
+    chat_id = (msg.get("chat") or {}).get("id")
+    if data == "help" and chat_id is not None:
+        client.send_message(chat_id, HELP_TEXT)
+    elif data == "open_hint" and chat_id is not None:
+        # WebApp URL 未配置时的降级提示
+        client.send_message(chat_id, "MiniForge WebApp 暂未开放，可直接在这里发描述生成图片～")
     # 第一版：再生成/换风格/同款仅确认 skeleton，不重跑核心链路。
     if cb_id:
         try:
@@ -159,6 +187,7 @@ def _generate_and_reply(
     chat_id: int | str,
     prompt: str,
     generate: Callable[..., dict[str, Any]],
+    webapp_url: str = "",
 ) -> None:
     try:
         result = generate(prompt)
@@ -175,7 +204,7 @@ def _generate_and_reply(
     image_b64 = result.get("image_base64")
     image_url = result.get("image_url")
     caption = "✨ 生成完成"
-    keyboard = build_growth_keyboard()
+    keyboard = build_growth_keyboard(webapp_url)
 
     if image_b64:
         try:

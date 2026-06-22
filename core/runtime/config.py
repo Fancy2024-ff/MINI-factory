@@ -51,6 +51,9 @@ GENERATED_APP_API_BASE = os.getenv("GENERATED_APP_API_BASE", "")
 # Telegram auto-deploy
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "")
+# Telegram WebApp 入口 URL（指向部署好的 /tg 页面）。配置后 bot 显示「打开 MiniForge」
+# WebApp 按钮；未配置则优雅降级为纯文本/普通按钮。须 https（Telegram WebApp 要求）。
+TELEGRAM_WEBAPP_URL = os.getenv("TELEGRAM_WEBAPP_URL", "")
 CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
 CLOUDFLARE_PROJECT_NAME = os.getenv("CLOUDFLARE_PROJECT_NAME", "miniforge-app")
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
