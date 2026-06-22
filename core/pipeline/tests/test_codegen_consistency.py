@@ -195,3 +195,62 @@ def test_generation_service_blueprint_driven(generated):
     assert "generateFromBlueprint" in svc, "generation.ts 缺少 generateFromBlueprint"
     assert "blueprint.json" in svc, "generation.ts 未引用 blueprint.json"
 
+
+
+def test_generation_api_config_present(generated):
+    """Generated mini-app carries a public API config for optional real image generation."""
+    miniapp_dir, _ = generated
+    cfg = miniapp_dir / "src" / "config" / "api.ts"
+    assert cfg.exists(), "missing src/config/api.ts"
+    txt = cfg.read_text(encoding="utf-8")
+    assert "GENERATION_MODE" in txt
+    assert "IMAGE_GENERATION_PATH" in txt
+    assert "IMAGE_GENERATION_API_KEY" not in txt
+    assert "IMAGE_GENERATION_ENDPOINT" not in txt
+
+
+def test_generation_service_has_api_mode_path(generated):
+    """generation.ts keeps mock mode but can call apps/api for ai-image."""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "services" / "generation.ts").read_text(encoding="utf-8")
+    assert "callRealApi" in txt
+    assert "GENERATION_MODE" in txt
+    assert "IMAGE_GENERATION_PATH" in txt
+    assert "Authorization" not in txt
+    assert "Bearer " not in txt
+
+
+def test_api_config_default_is_mock_no_token_residue(generated):
+    """默认（未配置 env）生成的 api.ts 必须是 mock + 空 base，且无未填 token 残留。"""
+    miniapp_dir, gen_source = generated
+    txt = (miniapp_dir / "src" / "config" / "api.ts").read_text(encoding="utf-8")
+    assert "__API_BASE__" not in txt and "__GENERATION_MODE__" not in txt, "api.ts 残留未填注入 token"
+    assert "export const API_BASE = ''" in txt
+    assert "export const GENERATION_MODE: 'mock' | 'api' = 'mock'" in txt
+    assert gen_source.get("generation_mode") == "mock"
+
+
+def test_api_config_api_mode_injects_https_base(sample_app, sample_prd, tmp_path, monkeypatch):
+    """配置 GENERATION_MODE=api + https base 时，codegen 注入真实 api 模式与绝对域名。"""
+    from core.runtime import config
+
+    monkeypatch.setattr(config, "GENERATION_MODE", "api")
+    monkeypatch.setattr(config, "GENERATED_APP_API_BASE", "https://api.example.com/")
+    miniapp_dir, gen_source = generate_miniapp(sample_app, sample_prd, tmp_path)
+    txt = (miniapp_dir / "src" / "config" / "api.ts").read_text(encoding="utf-8")
+    assert "export const API_BASE = 'https://api.example.com'" in txt, "未注入或未规范化 https base"
+    assert "export const GENERATION_MODE: 'mock' | 'api' = 'api'" in txt
+    assert gen_source.get("generation_mode") == "api"
+
+
+def test_api_config_non_https_base_falls_back_to_mock(sample_app, sample_prd, tmp_path, monkeypatch):
+    """非 https 绝对域名（真机必崩）必须回退 mock，绝不生成会失败的 api.ts。"""
+    from core.runtime import config
+
+    monkeypatch.setattr(config, "GENERATION_MODE", "api")
+    monkeypatch.setattr(config, "GENERATED_APP_API_BASE", "http://api.example.com")
+    miniapp_dir, gen_source = generate_miniapp(sample_app, sample_prd, tmp_path)
+    txt = (miniapp_dir / "src" / "config" / "api.ts").read_text(encoding="utf-8")
+    assert "export const GENERATION_MODE: 'mock' | 'api' = 'mock'" in txt
+    assert "export const API_BASE = ''" in txt
+    assert gen_source.get("generation_mode") == "mock"

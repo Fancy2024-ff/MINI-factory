@@ -11,6 +11,7 @@
 import { SELECTED_TEMPLATE, PREVIEW_TYPE } from '../config/template'
 // blueprint.json 由 codegen 在生成项目时写入（template.json -> blueprint）。
 import blueprintJson from '../config/blueprint.json'
+import { API_BASE, GENERATION_MODE, IMAGE_GENERATION_PATH } from '../config/api'
 
 export type PreviewType =
   | 'avatar'
@@ -68,11 +69,14 @@ export interface GenerateInput {
   extra?: Record<string, any>
 }
 
-// 预留：真实后端地址 + 模式开关。留空/mock = 走本地 mock。
-const GENERATION_ENDPOINT = ''
-const GENERATION_MODE: 'mock' | 'api' = 'mock'
+// 真实生成模式由 config/api.ts 控制。前端只知道 apps/api 地址，不接触中转站 URL/key。
+// 第一阶段真实链路只支持 ai-image / preview_type=image，其余模板继续走 mock。
 
 const STORAGE_PREFIX = 'gen-result:'
+
+// base64 图片保留上限（约 700KB 编码后）：微信单 key storage 上限约 1MB，
+// 超过则丢弃 base64、依赖 image_url，避免 setStorageSync 失败丢结果。
+const MAX_BASE64_LEN = 700_000
 
 // 安全默认蓝图：blueprint.json 缺失/损坏时兜底，保证闭环不断。
 const FALLBACK_BLUEPRINT: Blueprint = {
@@ -159,10 +163,57 @@ function buildFromBlueprint(
   }
 }
 
-// 预留真实 API 调用（当前未启用）。返回 null 表示回退本地 mock。
-async function callRealApi(_input: GenerateInput): Promise<GeneratedResult | null> {
-  // 后续接真实后端时在此实现 uni.request(GENERATION_ENDPOINT, ...)。
-  return null
+// 真实 API 路径：调 apps/api 的 /api/generation/image（仅 ai-image / image 预览）。
+// 返回 null 表示不走真实链路（非 ai-image 或未配置），由调用方回退 mock。
+async function callRealApi(bp: Blueprint, input: GenerateInput): Promise<GeneratedResult | null> {
+  // 第一阶段真实链路只覆盖 ai-image / preview_type=image。
+  if (bp.template_id !== 'ai-image' || bp.preview_type !== 'image') return null
+
+  const prompt = (input.text || '').trim()
+  const style = (input.extra && input.extra.style) || ''
+  const aspectRatio = (input.extra && input.extra.aspect_ratio) || '1:1'
+
+  const resp = await new Promise<any>((resolve, reject) => {
+    uni.request({
+      url: API_BASE + IMAGE_GENERATION_PATH,
+      method: 'POST',
+      data: { template_id: bp.template_id, prompt, style, aspect_ratio: aspectRatio },
+      header: { 'Content-Type': 'application/json' },
+      success: (r) => resolve(r.data),
+      fail: (e) => reject(e),
+    })
+  })
+
+  if (!resp || !resp.ok || !resp.result) {
+    // 后端返回结构化错误，交给上层转友好错误态。
+    const msg = (resp && resp.error && resp.error.message) || '图片生成失败，请稍后重试'
+    throw new Error(msg)
+  }
+
+  const r = resp.result
+  const example = bp.mock_examples[0] || FALLBACK_BLUEPRINT.mock_examples[0]
+  // 微信小程序单 key storage 上限约 1MB。优先用 image_url；base64 仅在无 url 且
+  // 体积可控时保留，避免 setStorageSync 超限导致结果丢失。
+  const imageUrl = r.image_url || ''
+  let imageBase64 = ''
+  if (!imageUrl && r.image_base64 && r.image_base64.length <= MAX_BASE64_LEN) {
+    imageBase64 = r.image_base64
+  }
+  return {
+    id: genId(),
+    createdAt: Date.now(),
+    template: bp.template_id,
+    title: example.title,
+    previewType: 'image',
+    previewData: { image: imageUrl, image_base64: imageBase64, prompt: r.prompt },
+    shareTitle: example.share_title,
+    shareCopy: example.share_copy,
+    unlockHint: example.unlock_hint,
+    watermarkEnabled: true,
+    inputSummary: prompt,
+    sourceBlueprint: bp.template_id,
+    nextActionHint: bp.unlock_hooks[0] || '分享解锁更多',
+  }
 }
 
 // blueprint 驱动的生成入口。
@@ -180,8 +231,11 @@ export async function generateFromBlueprint(
 }
 
 export async function mockGenerate(input: GenerateInput): Promise<GeneratedResult> {
-  if (GENERATION_MODE === 'api' && GENERATION_ENDPOINT) {
-    const real = await callRealApi(input)
+  const bp = loadBlueprint()
+  // api 模式：先走真实链路；返回 null（不支持的模板）才回退 mock。
+  // 真实调用抛错时直接抛给上层，由 form/result 转友好错误态，不静默吞掉。
+  if (GENERATION_MODE === 'api') {
+    const real = await callRealApi(bp, input)
     if (real) {
       saveResult(real)
       return real
@@ -189,7 +243,7 @@ export async function mockGenerate(input: GenerateInput): Promise<GeneratedResul
   }
   // 本地 mock：模拟一点生成耗时
   await new Promise((r) => setTimeout(r, 600))
-  return generateFromBlueprint(loadBlueprint(), input)
+  return generateFromBlueprint(bp, input)
 }
 
 export function saveResult(result: GeneratedResult): void {

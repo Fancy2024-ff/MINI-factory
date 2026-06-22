@@ -192,6 +192,15 @@ class RealAppInput(BaseModel):
         return self
 
 
+class ImageGenerationRequest(BaseModel):
+    """图片生成请求（apps/api 仅做 HTTP adapter，不含 provider 业务逻辑）。"""
+
+    template_id: str = "ai-image"
+    prompt: str = ""
+    style: str = ""
+    aspect_ratio: str = "1:1"
+
+
 # ---------------------------------------------------------------------------
 # SECTION: Pipeline
 # ---------------------------------------------------------------------------
@@ -684,6 +693,73 @@ def get_overview():
         "platforms_configured": platforms_configured,
         "pipeline_running": running,
         "current_job_id": pipeline_job_id if running else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# SECTION: Image Generation (real provider via core.integrations)
+# ---------------------------------------------------------------------------
+# 权限边界：这是面向「生成产物（小程序前端）」的 runtime/public 接口，不是 dashboard
+# 管理接口。生成出来的小程序不持有 DASHBOARD_API_KEY，因此本接口不挂 verify_api_key，
+# 否则 api 模式在生产 apps/api 下必 401。provider key 只在后端 env，不下发前端。
+# 仅此 runtime 接口豁免管理鉴权；其它 dashboard 管理接口的鉴权保持不变。
+
+# 防滥用：prompt 长度上限（runtime 接口无管理鉴权，需基础输入约束）。
+MAX_PROMPT_LEN = 2000
+
+
+@app.post("/api/generation/image")
+def generate_image_endpoint(req: ImageGenerationRequest):
+    """生成产物图片生成 runtime 接口（public，不挂 dashboard 鉴权）。
+
+    HTTP adapter：调 core.integrations.image_generation，返回 ok/result 或 ok/error。
+    只做适配 + 校验，不含 provider 业务逻辑；不透传 provider 原始错误/key。
+    """
+    from core.integrations.image_generation import (
+        ImageGenerationError,
+        ERR_FAILED,
+        generate_image,
+    )
+
+    prompt = (req.prompt or "").strip()
+    if not prompt:
+        return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "prompt 不能为空"}}
+    if len(prompt) > MAX_PROMPT_LEN:
+        return {
+            "ok": False,
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": f"prompt 过长（上限 {MAX_PROMPT_LEN} 字符）",
+            },
+        }
+    # 第一阶段只支持 ai-image。
+    if req.template_id != "ai-image":
+        return {
+            "ok": False,
+            "error": {
+                "code": "UNSUPPORTED_TEMPLATE",
+                "message": f"暂不支持模板 {req.template_id} 的真实图片生成",
+            },
+        }
+
+    try:
+        result = generate_image(prompt, style=req.style, aspect_ratio=req.aspect_ratio)
+    except ImageGenerationError as e:
+        # 只回稳定 code + 安全 message，不暴露 provider 原始信息。
+        return {"ok": False, "error": {"code": e.code, "message": e.message}}
+    except Exception:
+        return {"ok": False, "error": {"code": ERR_FAILED, "message": "图片生成失败，请稍后重试"}}
+
+    return {
+        "ok": True,
+        "result": {
+            "preview_type": "image",
+            "image_url": result.get("image_url"),
+            "image_base64": result.get("image_base64"),
+            "prompt": result.get("prompt"),
+            "provider": result.get("provider"),
+            "metadata": result.get("metadata", {}),
+        },
     }
 
 

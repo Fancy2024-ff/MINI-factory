@@ -34,8 +34,27 @@ TOKEN_APP_FEATURES_JSON = "__APP_FEATURES_JSON__"
 TOKEN_APP_FEATURE_TITLE = "__APP_FEATURE_TITLE__"
 TOKEN_APP_TEMPLATE = "__APP_TEMPLATE__"
 TOKEN_APP_PREVIEW_TYPE = "__APP_PREVIEW_TYPE__"
+# 生成产物前端运行时配置 token（注入 src/config/api.ts）
+TOKEN_API_BASE = "__API_BASE__"
+TOKEN_GENERATION_MODE = "__GENERATION_MODE__"
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "src" / "templates"
+
+
+def _resolve_generation_runtime() -> tuple[str, str]:
+    """决定生成产物前端的 (generation_mode, api_base)。
+
+    安全收口：只有当 mode=api 且 api_base 是 https 绝对域名时才真正开 api 模式；
+    否则强制回退 mock，避免生成出一个真机必崩（相对路径 / 非 https）的 api.ts。
+    """
+    from core.runtime import config
+
+    mode = (config.GENERATION_MODE or "mock").strip().lower()
+    api_base = (config.GENERATED_APP_API_BASE or "").strip().rstrip("/")
+    if mode == "api" and api_base.startswith("https://"):
+        return "api", api_base
+    return "mock", ""
+
 
 
 def _write(path: Path, content: str) -> None:
@@ -125,6 +144,17 @@ def generate_miniapp(app: dict, prd_json: dict, output_dir: Path, template: str 
         src_dir / "config" / "blueprint.json",
         json.dumps(blueprint_out, ensure_ascii=False, indent=2),
     )
+
+    # --- 2c. 注入前端运行时配置 src/config/api.ts（mock/api 模式 + api base）---
+    # 安全收口在 _resolve_generation_runtime：非 https 绝对域名一律回退 mock。
+    gen_mode, api_base = _resolve_generation_runtime()
+    gen_source["generation_mode"] = gen_mode
+    api_cfg = src_dir / "config" / "api.ts"
+    if api_cfg.exists():
+        cfg_text = api_cfg.read_text(encoding="utf-8")
+        cfg_text = cfg_text.replace(TOKEN_API_BASE, api_base)
+        cfg_text = cfg_text.replace(TOKEN_GENERATION_MODE, gen_mode)
+        _write(api_cfg, cfg_text)
 
     # --- 3a. package.json：deps/scripts 来自模板，仅覆盖 App 元信息 ---
     pkg = json.loads((base_template / "package.json").read_text(encoding="utf-8-sig"))
