@@ -1,0 +1,62 @@
+{
+  "id": "sticker-viral",
+  "name_cn": "表情包工厂",
+  "name_en": "Sticker Maker",
+  "category": "viral",
+  "description": "输入一句话或主题，一键生成整套搞怪表情包，分享到群聊解锁更多。",
+  "preview_type": "stickerPack",
+  "input_fields": [
+    {
+      "id": "theme",
+      "label": "表情主题",
+      "type": "text",
+      "required": true,
+      "placeholder": "如：打工人 / 猫猫 / 怼人专用"
+    },
+    {
+      "id": "mood",
+      "label": "情绪倾向",
+      "type": "select",
+      "required": false,
+      "placeholder": "选择整体情绪",
+      "options": ["搞笑", "可爱", "暴躁", "治愈"]
+    }
+  ],
+  "result_fields": [
+    { "id": "theme", "label": "主题", "type": "text" },
+    { "id": "stickers", "label": "表情列表", "type": "list" },
+    { "id": "count", "label": "数量", "type": "number" }
+  ],
+  "pages": ["index", "form", "result", "pack", "profile"],
+  "share_hooks": [
+    "我做了一套搞怪表情包！",
+    "一句话生成整套表情包，分享到群聊解锁更多表情"
+  ],
+  "unlock_hooks": [
+    "分享到群聊解锁更多表情",
+    "分享解锁去水印导出"
+  ],
+  "growth_angles": [
+    "表情包是群聊高频流通物，单套表情可在多个群反复传播",
+    "群聊解锁机制把每次使用都变成一次拉新触点"
+  ],
+  "compliance_notes": [
+    "表情内容需过滤违法违规与攻击性文字",
+    "不得生成涉及真实人物的恶意调侃表情"
+  ],
+  "supported_platforms": ["wechat"],
+  "mock_examples": [
+    {
+      "title": "你的专属表情包",
+      "preview_type": "stickerPack",
+      "preview_data": {
+        "theme": "默认主题",
+        "stickers": ["开心", "加油", "无语", "比心", "震惊", "收到"],
+        "count": 6
+      },
+      "share_title": "我做了一套搞怪表情包！",
+      "share_copy": "一句话生成整套表情包，分享到群聊解锁更多表情",
+      "unlock_hint": "分享到群聊解锁更多表情 + 去水印导出"
+    }
+  ]
+}

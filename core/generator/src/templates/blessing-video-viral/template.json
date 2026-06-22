@@ -1,0 +1,71 @@
+{
+  "id": "blessing-video-viral",
+  "name_cn": "祝福贺卡",
+  "name_en": "Blessing Card",
+  "category": "viral",
+  "description": "填上收礼人和祝福语，一键生成专属祝福贺卡，群发好友解锁高清。",
+  "preview_type": "blessingCard",
+  "input_fields": [
+    {
+      "id": "to",
+      "label": "送给谁",
+      "type": "text",
+      "required": true,
+      "placeholder": "如：亲爱的朋友 / 张总 / 老妈"
+    },
+    {
+      "id": "festival",
+      "label": "节日/场合",
+      "type": "select",
+      "required": false,
+      "placeholder": "选择节日",
+      "options": ["新年", "生日", "中秋", "母亲节", "毕业季"]
+    },
+    {
+      "id": "message",
+      "label": "祝福语",
+      "type": "textarea",
+      "required": false,
+      "placeholder": "写下你的祝福，如：愿你新年快乐，万事如意！"
+    }
+  ],
+  "result_fields": [
+    { "id": "to", "label": "收礼人", "type": "text" },
+    { "id": "festival", "label": "节日", "type": "text" },
+    { "id": "message", "label": "祝福语", "type": "text" },
+    { "id": "theme", "label": "贺卡主题", "type": "image" }
+  ],
+  "pages": ["index", "form", "result", "greeting", "profile"],
+  "share_hooks": [
+    "送你一张专属祝福贺卡",
+    "填名字和祝福语，一键生成祝福贺卡群发好友"
+  ],
+  "unlock_hooks": [
+    "分享/群发解锁高清贺卡",
+    "分享解锁去水印导出"
+  ],
+  "growth_angles": [
+    "节日祝福是高频群发场景，单张贺卡可触达大量好友",
+    "群发解锁机制让每次祝福都自然带来新访客"
+  ],
+  "compliance_notes": [
+    "祝福内容需过滤违法违规与敏感信息",
+    "不得用于商业营销骚扰或诱导分享之外的违规导流"
+  ],
+  "supported_platforms": ["wechat"],
+  "mock_examples": [
+    {
+      "title": "专属祝福贺卡",
+      "preview_type": "blessingCard",
+      "preview_data": {
+        "to": "亲爱的朋友",
+        "festival": "新年",
+        "message": "愿你新年快乐，万事如意！",
+        "theme": "festival-card-placeholder"
+      },
+      "share_title": "送你一张专属祝福贺卡",
+      "share_copy": "填名字和祝福语，一键生成祝福贺卡群发好友",
+      "unlock_hint": "分享/群发解锁高清贺卡 + 去水印"
+    }
+  ]
+}

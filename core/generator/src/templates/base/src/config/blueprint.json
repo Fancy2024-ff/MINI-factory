@@ -1,0 +1,31 @@
+{
+  "template_id": "base",
+  "app_name": "",
+  "preview_type": "text",
+  "input_fields": [
+    {
+      "id": "text",
+      "label": "输入内容",
+      "type": "textarea",
+      "required": false,
+      "placeholder": "请输入内容 / 主题 / 一句话..."
+    }
+  ],
+  "pages": ["index", "form", "result", "profile"],
+  "result_contract": ["text"],
+  "share_hooks": ["看看我用它生成的结果", "一键生成，分享解锁完整高清结果"],
+  "unlock_hooks": ["分享解锁高清无水印结果", "分享解锁更多模板"],
+  "growth_angles": ["通用工具型分享", "结果页内置分享入口"],
+  "compliance_notes": ["生成内容需符合平台规范"],
+  "mock_examples": [
+    {
+      "title": "生成结果",
+      "preview_type": "text",
+      "preview_data": { "text": "这是一段示例生成结果。" },
+      "share_title": "看看我用它生成的结果",
+      "share_copy": "一键生成，分享解锁完整高清结果",
+      "unlock_hint": "分享解锁高清无水印结果 + 解锁更多模板"
+    }
+  ],
+  "is_fallback": true
+}

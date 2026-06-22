@@ -1,0 +1,61 @@
+{
+  "id": "pet-talk-viral",
+  "name_cn": "宠物说话",
+  "name_en": "Pet Talk",
+  "category": "viral",
+  "description": "上传宠物照片，配一句台词，生成会说话的宠物视频，分享朋友圈解锁高清。",
+  "preview_type": "petVideo",
+  "input_fields": [
+    {
+      "id": "pet_photo",
+      "label": "上传宠物照片",
+      "type": "image",
+      "required": false,
+      "placeholder": "点击上传宠物照片（占位，可选）"
+    },
+    {
+      "id": "line",
+      "label": "宠物台词",
+      "type": "textarea",
+      "required": true,
+      "placeholder": "想让它说什么？如：主人，该喂饭啦！"
+    }
+  ],
+  "result_fields": [
+    { "id": "line", "label": "台词", "type": "text" },
+    { "id": "duration", "label": "时长(秒)", "type": "number" },
+    { "id": "poster", "label": "视频封面", "type": "image" }
+  ],
+  "pages": ["index", "form", "result", "upload", "profile"],
+  "share_hooks": [
+    "我家宠物开口说话了！",
+    "上传宠物照 + 一句台词，生成会说话的宠物视频"
+  ],
+  "unlock_hooks": [
+    "分享到朋友圈解锁高清视频",
+    "分享解锁去水印导出"
+  ],
+  "growth_angles": [
+    "宠物内容自带情感共鸣，朋友圈分享转化率高",
+    "台词可定制带来反复创作，单只宠物可产出多条视频"
+  ],
+  "compliance_notes": [
+    "上传宠物照片需为用户本人持有，不涉及他人隐私",
+    "台词内容需过滤违法违规与误导信息"
+  ],
+  "supported_platforms": ["wechat"],
+  "mock_examples": [
+    {
+      "title": "会说话的宠物视频",
+      "preview_type": "petVideo",
+      "preview_data": {
+        "line": "主人，该喂饭啦！",
+        "duration": 8,
+        "poster": "pet-video-poster-placeholder"
+      },
+      "share_title": "我家宠物开口说话了！",
+      "share_copy": "上传宠物照 + 一句台词，生成会说话的宠物视频",
+      "unlock_hint": "分享到朋友圈解锁高清视频 + 去水印"
+    }
+  ]
+}

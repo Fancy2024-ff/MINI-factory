@@ -1,0 +1,59 @@
+{
+  "id": "ai-image",
+  "name_cn": "AI图片工具",
+  "name_en": "AI Image Tool",
+  "category": "ai-tool",
+  "description": "输入描述或上传图片，生成/处理图片结果，分享解锁高清无水印版。",
+  "preview_type": "image",
+  "input_fields": [
+    {
+      "id": "prompt",
+      "label": "图片描述",
+      "type": "textarea",
+      "required": true,
+      "placeholder": "描述你想要的图片，如：夕阳下的海边小屋，油画风"
+    },
+    {
+      "id": "source_image",
+      "label": "上传原图",
+      "type": "image",
+      "required": false,
+      "placeholder": "点击上传待处理图片（占位，可选）"
+    }
+  ],
+  "result_fields": [
+    { "id": "image", "label": "生成图片", "type": "image" },
+    { "id": "prompt", "label": "描述", "type": "text" }
+  ],
+  "pages": ["index", "form", "result", "canvas", "profile"],
+  "share_hooks": [
+    "我用 AI 生成了这张图，快来看！",
+    "一句话生成图片，分享解锁高清无水印版"
+  ],
+  "unlock_hooks": [
+    "分享给好友解锁高清无水印",
+    "分享解锁更多生成次数"
+  ],
+  "growth_angles": [
+    "AI 生成图天然适合社交展示，带动好友尝试",
+    "高清/次数解锁制造复用动机，单用户可多次生成"
+  ],
+  "compliance_notes": [
+    "上传图片需为用户本人持有，不涉及他人版权与隐私",
+    "生成图片不得用于伪造、误导或违法用途"
+  ],
+  "supported_platforms": ["wechat"],
+  "mock_examples": [
+    {
+      "title": "你的 AI 图片作品",
+      "preview_type": "image",
+      "preview_data": {
+        "image": "ai-image-preview-placeholder",
+        "prompt": "示例：夕阳下的海边小屋，油画风"
+      },
+      "share_title": "我用 AI 生成了这张图，快来看！",
+      "share_copy": "一句话生成图片，分享解锁高清无水印版",
+      "unlock_hint": "分享给好友解锁高清无水印 + 解锁更多生成次数"
+    }
+  ]
+}
