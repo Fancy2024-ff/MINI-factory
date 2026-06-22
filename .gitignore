@@ -36,6 +36,10 @@ data/reports/
 data/outputs/
 data/pipeline_state.json
 
+# QA build scratch (real npm install + build runs here, never commit)
+**/.qa-build/
+data/.tmp/
+
 # IDE
 .vscode/
 .idea/

@@ -19,7 +19,6 @@ def run_engineering_qa(miniapp_dir: Path, output_dir: Path) -> dict:
     """验证项目完整性、编码、路径、内容，并自动执行 npm install + build。"""
     import shutil
     import subprocess as sp
-    import tempfile
 
     issues = []
 
@@ -169,7 +168,13 @@ def run_engineering_qa(miniapp_dir: Path, output_dir: Path) -> dict:
     npm_path = shutil.which("npm")
     install_timeout = int(os.environ.get("QA_INSTALL_TIMEOUT", "180"))
     build_timeout = int(os.environ.get("QA_BUILD_TIMEOUT", "180"))
-    build_tmp_root = Path(tempfile.mkdtemp(prefix="miniapp-factory-build-"))
+    # 在 repo 内可控目录构建，避免使用系统 AppData\Local\Temp。
+    # 某些 Windows 环境下，vite/esbuild 在 Temp 下构建时会向上递归读目录
+    # （"../../../../.."）命中无权限目录，报 "Access is denied" 导致 build 失败。
+    # 用 output_dir/.qa-build/miniapp（已被 .gitignore 忽略）规避该问题。
+    build_tmp_root = (output_dir / ".qa-build").resolve()
+    shutil.rmtree(build_tmp_root, ignore_errors=True)
+    build_tmp_root.mkdir(parents=True, exist_ok=True)
     build_work_dir = build_tmp_root / "miniapp"
     shutil.copytree(
         str(miniapp_dir),
@@ -266,6 +271,8 @@ def run_engineering_qa(miniapp_dir: Path, output_dir: Path) -> dict:
             build_error_summary = str(e)
             issues.append(f"build 异常: {e}")
 
+    # 清理构建工作目录。用 ignore_errors=True：Windows 下 npm 的 .npm-cache
+    # 可能被占用句柄锁住而删不掉，残留也无妨——它在 .gitignore 忽略的 .qa-build 下。
     shutil.rmtree(build_tmp_root, ignore_errors=True)
 
     # --- 11. 验证 dist 目录存在且含真实构建产物 ---
