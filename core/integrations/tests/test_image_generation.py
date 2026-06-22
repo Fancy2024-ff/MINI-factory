@@ -148,3 +148,81 @@ def test_error_message_has_no_key(configured, monkeypatch):
     except ig.ImageGenerationError as e:
         assert "test-secret-key-DO-NOT-LEAK" not in str(e)
         assert "test-secret-key-DO-NOT-LEAK" not in e.message
+
+
+
+def test_gemini_payload_shape(monkeypatch):
+    monkeypatch.setattr(
+        ig,
+        "IMAGE_GENERATION_ENDPOINT",
+        "https://realtokens.ai/v1beta/models/gemini-3.1-flash-image-preview:generateContent",
+    )
+    payload = ig._build_payload("a cat", style="cyberpunk", aspect_ratio="1:1")
+    assert "contents" in payload
+    assert payload["contents"][0]["parts"][0]["text"].startswith("a cat")
+    assert payload["generationConfig"]["responseModalities"] == ["TEXT", "IMAGE"]
+
+
+def test_gemini_inline_data_normalizes(monkeypatch):
+    monkeypatch.setattr(ig, "IMAGE_GENERATION_PROVIDER", "gemini-3.1-flash-image-preview")
+    raw = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"text": "done"},
+                        {"inlineData": {"mimeType": "image/png", "data": "QUJD"}},
+                    ]
+                }
+            }
+        ],
+        "usageMetadata": {"totalTokenCount": 10},
+    }
+    out = ig._normalize_response(raw, "a cat")
+    assert out["provider"] == "gemini-3.1-flash-image-preview"
+    assert out["image_base64"] == "QUJD"
+    assert out["image_url"] is None
+
+
+def test_gemini_markdown_data_uri_normalizes(monkeypatch):
+    monkeypatch.setattr(ig, "IMAGE_GENERATION_PROVIDER", "gemini-3.1-flash-image-preview")
+    raw = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"text": "![generated](data:image/jpeg;base64,QUJDRA==)"},
+                    ]
+                }
+            }
+        ]
+    }
+    out = ig._normalize_response(raw, "a cat")
+    assert out["image_base64"] == "QUJDRA=="
+
+
+
+def test_openai_chat_payload_shape(monkeypatch):
+    monkeypatch.setattr(ig, "IMAGE_GENERATION_ENDPOINT", "https://realtokens.ai/v1/chat/completions")
+    monkeypatch.setattr(ig, "IMAGE_GENERATION_PROVIDER", "gemini-3.1-flash-image-preview")
+    payload = ig._build_payload("a cat", style="cyberpunk", aspect_ratio="1:1")
+    assert payload["model"] == "gemini-3.1-flash-image-preview"
+    assert payload["messages"][0]["role"] == "user"
+    assert "a cat" in payload["messages"][0]["content"]
+
+
+def test_openai_chat_markdown_data_uri_normalizes(monkeypatch):
+    monkeypatch.setattr(ig, "IMAGE_GENERATION_PROVIDER", "gemini-3.1-flash-image-preview")
+    raw = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "![generated](data:image/jpeg;base64,QUJDRA==)",
+                }
+            }
+        ]
+    }
+    out = ig._normalize_response(raw, "a cat")
+    assert out["image_base64"] == "QUJDRA=="
+    assert out["image_url"] is None
