@@ -201,6 +201,13 @@ class ImageGenerationRequest(BaseModel):
     aspect_ratio: str = "1:1"
 
 
+class TemplateGenerationRequest(BaseModel):
+    """模板级生成请求：结构化 input 由 core.generator.template_generation 改写为出图 prompt。"""
+
+    template_id: str = "ai-image"
+    input: dict = {}
+
+
 # ---------------------------------------------------------------------------
 # SECTION: Pipeline
 # ---------------------------------------------------------------------------
@@ -771,6 +778,38 @@ def generate_image_endpoint(req: ImageGenerationRequest):
             "metadata": result.get("metadata", {}),
         },
     }
+
+
+@app.post("/api/generation/template")
+def generate_template_endpoint(req: TemplateGenerationRequest):
+    """模板级生成 runtime 接口（public，不挂 dashboard 鉴权）。
+
+    白名单 template_id（目前 ai-image + avatar-viral），结构化 input 经
+    core.generator.template_generation 改写为出图 prompt。不透传 provider key/原文。
+    """
+    from core.integrations.image_generation import ImageGenerationError, ERR_FAILED
+    from core.generator.template_generation import (
+        SUPPORTED_TEMPLATES,
+        generate_template,
+    )
+
+    if req.template_id not in SUPPORTED_TEMPLATES:
+        return {
+            "ok": False,
+            "error": {
+                "code": "UNSUPPORTED_TEMPLATE",
+                "message": f"暂不支持模板 {req.template_id}",
+            },
+        }
+
+    inp = req.input if isinstance(req.input, dict) else {}
+    try:
+        return generate_template(req.template_id, inp)
+    except ImageGenerationError as e:
+        retryable = e.code in {"IMAGE_GENERATION_TIMEOUT", "IMAGE_GENERATION_PROVIDER_FAILED"}
+        return {"ok": False, "error": {"code": e.code, "message": e.message, "retryable": retryable}}
+    except Exception:
+        return {"ok": False, "error": {"code": ERR_FAILED, "message": "生成失败，请稍后重试", "retryable": True}}
 
 
 # ---------------------------------------------------------------------------
