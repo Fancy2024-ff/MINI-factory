@@ -45,6 +45,7 @@ from core.growth.share_strategy import build_share_strategy
 from core.qa.engineering_qa import run_engineering_qa
 from core.qa.growth_qa import run_growth_qa
 from core.qa.compliance_qa import run_compliance_qa
+from core.qa.generator_qa import run_generator_qa
 from core.qa.readiness import build_submission_readiness
 from core.runtime.artifact_manifest import build_artifact_manifest
 from core.runtime import artifacts as artifact_names
@@ -555,11 +556,14 @@ def _run_pipeline_steps(mode: str, job_id: str, output_dir: Path) -> dict:
     t0 = time.time()
     growth_qa = run_growth_qa(output_dir, miniapp_dir=miniapp_dir)
     compliance_qa = run_compliance_qa(miniapp_dir, output_dir)
+    generator_qa = run_generator_qa(miniapp_dir=miniapp_dir)
     _write(output_dir / artifact_names.GROWTH_QA_JSON, json.dumps(growth_qa, ensure_ascii=False, indent=2))
     _write(output_dir / artifact_names.COMPLIANCE_QA_JSON, json.dumps(compliance_qa, ensure_ascii=False, indent=2))
+    _write(output_dir / artifact_names.GENERATOR_QA_JSON, json.dumps(generator_qa, ensure_ascii=False, indent=2))
     p(f"  增长 QA: {'通过' if growth_qa['passed'] else '未通过'}")
     p(f"  合规 QA: {'通过' if compliance_qa['passed'] else '未通过'}")
-    for issue in (growth_qa['issues'] + compliance_qa['issues'])[:5]:
+    p(f"  生成器 QA: {'通过' if generator_qa['passed'] else '未通过'}")
+    for issue in (growth_qa['issues'] + compliance_qa['issues'] + generator_qa['issues'])[:5]:
         p(f"    ▸ {issue}")
     for warn in compliance_qa.get('warnings', [])[:5]:
         p(f"    ⚠ {warn}")

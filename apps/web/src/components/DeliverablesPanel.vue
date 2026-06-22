@@ -44,6 +44,7 @@ const GROWTH_DELIVERABLES: DeliverableItem[] = [
   { key: 'share-strategy.md', name: '分享策略', purpose: '分享钩子、激励与去水印设计' },
   { key: 'growth-qa-report.json', name: '增长 QA', purpose: '增长交付物完整性检查' },
   { key: 'compliance-qa-report.json', name: '合规 QA', purpose: '隐私、协议与审核备注检查' },
+  { key: 'generator-qa-report.json', name: '生成器 QA', purpose: '模板配置 / 蓝图 / 生成产物质量检查' },
 ]
 
 function hasArtifact(key: string): boolean {
@@ -63,8 +64,10 @@ function getArtifactPreview(key: string): string {
   if (data.name) return data.name
   if (data.viral_score !== undefined) return `Viral: ${data.viral_score} (${data.tier || 'unknown'})`
   if (data.selected_template) return `模板: ${data.selected_template}`
+  if (data.preview_type) return `预览: ${data.preview_type}${data.template ? ' / ' + data.template : ''}`
   if (data.score !== undefined) return `评分: ${data.score}`
   if (data.qa_passed !== undefined) return data.qa_passed ? 'QA 通过' : 'QA 未通过'
+  if (data.passed !== undefined) return data.passed ? 'QA 通过' : 'QA 未通过'
   return ''
 }
 

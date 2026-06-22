@@ -46,6 +46,8 @@ def build_artifact_manifest(output_dir: Path, qa: dict, readiness: dict, job_id:
          "status": "ready", "affects_submission": False, "next_action": "查看 issues"},
         {"path": "compliance-qa-report.json", "title": "合规 QA", "purpose": "隐私、协议、审核备注完整性检查",
          "status": "ready", "affects_submission": True, "next_action": "查看 issues"},
+        {"path": "generator-qa-report.json", "title": "生成器 QA", "purpose": "模板配置/蓝图/生成产物质量检查",
+         "status": "ready", "affects_submission": False, "next_action": "查看 issues"},
         {"path": "qa-report.json", "title": "QA 报告", "purpose": "质量检查 + 构建验证",
          "status": "ready" if qa_passed else "needs_review", "affects_submission": True,
          "next_action": "无" if qa_passed else "查看 issues 并修复"},

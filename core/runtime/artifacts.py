@@ -28,6 +28,7 @@ GROWTH_PLAN_MD = "growth-plan.md"
 SHARE_STRATEGY_MD = "share-strategy.md"
 GROWTH_QA_JSON = "growth-qa-report.json"
 COMPLIANCE_QA_JSON = "compliance-qa-report.json"
+GENERATOR_QA_JSON = "generator-qa-report.json"
 
 # 所有新增产物位（供 manifest/校验引用）
 NEW_ARTIFACTS = [
@@ -37,6 +38,7 @@ NEW_ARTIFACTS = [
     SHARE_STRATEGY_MD,
     GROWTH_QA_JSON,
     COMPLIANCE_QA_JSON,
+    GENERATOR_QA_JSON,
 ]
 
 

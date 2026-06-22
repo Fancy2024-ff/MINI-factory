@@ -81,6 +81,29 @@ const templateSummary = computed(() => {
   return selection?.selected_template || ''
 })
 
+// 预览类型 + 蓝图是否生成（来自 generator-source.json）
+const previewTypeSummary = computed(() => {
+  const gs: any = props.job?.artifacts?.['generator-source.json']
+  return gs?.preview_type || ''
+})
+
+const blueprintSummary = computed(() => {
+  const gs: any = props.job?.artifacts?.['generator-source.json']
+  if (!gs) return ''
+  // generator-source.json 含 preview_type 即表示已走 blueprint 接入流程
+  if (gs.preview_type) {
+    return gs.blueprint_is_fallback ? 'blueprint 已生成（兜底）' : 'blueprint 已生成'
+  }
+  return ''
+})
+
+// 生成器 QA 摘要（来自 generator-qa-report.json，pipeline 接入时才有）
+const generatorQaSummary = computed(() => {
+  const gq: any = props.job?.artifacts?.['generator-qa-report.json']
+  if (!gq) return ''
+  return gq.passed ? '生成器 QA 通过' : '生成器 QA 未通过'
+})
+
 const growthSummary = computed(() => {
   const hasGrowth = !!props.job?.artifacts?.['growth-plan.md']
   const hasShare = !!props.job?.artifacts?.['share-strategy.md']
@@ -150,6 +173,18 @@ const statusSummary = computed(() => {
       <div class="status-item" v-if="templateSummary">
         <span class="status-label">模板</span>
         <span class="status-value mono">{{ templateSummary }}</span>
+      </div>
+      <div class="status-item" v-if="previewTypeSummary">
+        <span class="status-label">预览类型</span>
+        <span class="status-value mono">{{ previewTypeSummary }}</span>
+      </div>
+      <div class="status-item" v-if="blueprintSummary">
+        <span class="status-label">蓝图</span>
+        <span class="status-value">{{ blueprintSummary }}</span>
+      </div>
+      <div class="status-item" v-if="generatorQaSummary">
+        <span class="status-label">生成器 QA</span>
+        <span class="status-value">{{ generatorQaSummary }}</span>
       </div>
       <div class="status-item" v-if="growthSummary">
         <span class="status-label">增长</span>
