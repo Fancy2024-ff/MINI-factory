@@ -46,6 +46,31 @@ export interface MockExample {
   unlock_hint: string
 }
 
+// 结构化传播闭环事实源（template.json.growth_loop -> blueprint -> 运行时）。
+// 这是「这套小程序带不带传播机制」的单一事实源：分享 CTA / 解锁 / 水印 / 去水印 /
+// 品牌露出 / 下载导出 / 能力真实度，全部结构化，不靠页面硬编码通用文案。
+export interface GrowthLoop {
+  has_share_cta: boolean
+  share_cta_label: string
+  share_title: string
+  share_copy: string
+  has_unlock: boolean
+  unlock_type: string
+  unlock_hint: string
+  has_watermark: boolean
+  watermark_label: string
+  remove_watermark_supported: boolean
+  remove_watermark_condition?: string
+  brand_exposure: boolean
+  brand_label: string
+  download_supported: boolean
+  export_supported: boolean
+  export_label: string
+  capability_mode: 'real' | 'fallback_preview'
+  capability_note: string
+  result_layer_logic?: string
+}
+
 export interface Blueprint {
   template_id: string
   app_name: string
@@ -68,6 +93,8 @@ export interface Blueprint {
   result_identity?: string
   boundary_note?: string
   frontend_badge?: string
+  // 结构化传播闭环事实源（P0-2）。
+  growth_loop?: GrowthLoop
 }
 
 export interface GeneratedResult {
@@ -81,6 +108,8 @@ export interface GeneratedResult {
   unlockHint: string
   watermarkEnabled: boolean
   createdAt: number
+  // 已分享解锁标记（去水印能力由 removeWatermarkSupported 决定，解锁不必然去水印）。
+  unlocked?: boolean
   // 模板能力真实状态（与 blueprint / 后端返回口径一致，结果页据此展示真实/预览）。
   templateStatus?: 'core_runnable' | 'honest_preview'
   generationBackend?: 'template_api' | 'honest_fallback'
@@ -89,6 +118,24 @@ export interface GeneratedResult {
   boundaryNote?: string
   qaStatus?: string
   qaHint?: string
+  // 结构化传播闭环（P0-2）：从 blueprint.growth_loop 透传，结果页据此展示
+  // 分享 CTA / 解锁 / 水印 / 去水印 / 品牌露出 / 下载导出 / 能力真实度，不靠硬编码。
+  growthLoop?: GrowthLoop
+  hasShareCta?: boolean
+  shareCtaLabel?: string
+  hasUnlock?: boolean
+  unlockType?: string
+  hasWatermark?: boolean
+  watermarkLabel?: string
+  removeWatermarkSupported?: boolean
+  removeWatermarkCondition?: string
+  brandExposure?: boolean
+  brandLabel?: string
+  downloadSupported?: boolean
+  exportSupported?: boolean
+  exportLabel?: string
+  capabilityMode?: 'real' | 'fallback_preview'
+  capabilityNote?: string
   // API 失败降级标记：true 表示核心模板真实链路失败、临时回退本地预览，不伪装成功。
   apiFailed?: boolean
   fallbackReason?: string
@@ -142,6 +189,28 @@ const FALLBACK_BLUEPRINT: Blueprint = {
   fallback_mode: true,
   boundary_note: '通用兜底模板：当前仅提供通用预览，非题材化真实生成。',
   frontend_badge: '通用预览',
+  // 通用兜底传播闭环：保证结果页始终能读到结构化 growth_loop，但不冒充 viral。
+  growth_loop: {
+    has_share_cta: true,
+    share_cta_label: '分享结果',
+    share_title: '看看我用它生成的结果',
+    share_copy: '一键生成，分享解锁完整高清结果',
+    has_unlock: true,
+    unlock_type: 'share_to_unlock',
+    unlock_hint: '分享解锁高清无水印结果',
+    has_watermark: true,
+    watermark_label: 'MiniForge 水印',
+    remove_watermark_supported: true,
+    remove_watermark_condition: '分享后解锁去水印结果',
+    brand_exposure: true,
+    brand_label: 'MiniForge 出品 · 结果附小程序码',
+    download_supported: false,
+    export_supported: false,
+    export_label: '导出入口已预留',
+    capability_mode: 'fallback_preview',
+    capability_note: '通用兜底模板：当前仅提供通用预览，非题材化真实生成。',
+    result_layer_logic: '结果页展示通用文本结果 + 含水印预览，分享 CTA 引导传播，解锁后去水印。',
+  },
 }
 
 let _blueprintCache: Blueprint | null = null
@@ -160,6 +229,31 @@ export function loadBlueprint(): Blueprint {
 
 function genId(): string {
   return 'g-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36)
+}
+
+// growth_loop（结构化传播闭环事实源）-> GeneratedResult 扁平字段。
+// 三条生成路径（本地 mock / 真实 API 成功 / API 失败降级）都用它，保证结果页拿到的
+// 分享 CTA / 解锁 / 水印 / 去水印 / 品牌 / 导出 / 能力真实度始终来自事实源、口径一致。
+function growthFields(bp: Blueprint): Partial<GeneratedResult> {
+  const gl = bp.growth_loop || FALLBACK_BLUEPRINT.growth_loop!
+  return {
+    growthLoop: gl,
+    hasShareCta: gl.has_share_cta,
+    shareCtaLabel: gl.share_cta_label,
+    hasUnlock: gl.has_unlock,
+    unlockType: gl.unlock_type,
+    hasWatermark: gl.has_watermark,
+    watermarkLabel: gl.watermark_label,
+    removeWatermarkSupported: gl.remove_watermark_supported,
+    removeWatermarkCondition: gl.remove_watermark_condition,
+    brandExposure: gl.brand_exposure,
+    brandLabel: gl.brand_label,
+    downloadSupported: gl.download_supported,
+    exportSupported: gl.export_supported,
+    exportLabel: gl.export_label,
+    capabilityMode: gl.capability_mode,
+    capabilityNote: gl.capability_note,
+  }
 }
 
 // PLACEHOLDER_GENERATION_BODY
@@ -191,14 +285,19 @@ function buildFromBlueprint(
   const shareCopy = example.share_copy || bp.share_hooks[1] || bp.share_hooks[0] || ''
   const unlockHint = example.unlock_hint || bp.unlock_hooks[0] || '分享解锁高清无水印结果'
 
+  // growth_loop 作为传播文案的优先事实源：有结构化 share/unlock 文案时优先用它，
+  // 没有则回退到 mock_example / share_hooks，保证三条路径口径统一。
+  const gl = bp.growth_loop
+  const gf = growthFields(bp)
+
   return {
     template: bp.template_id,
     title: example.title,
     previewType: (example.preview_type || bp.preview_type) as PreviewType,
     previewData,
-    shareTitle,
-    shareCopy,
-    unlockHint,
+    shareTitle: (gl && gl.share_title) || shareTitle,
+    shareCopy: (gl && gl.share_copy) || shareCopy,
+    unlockHint: (gl && gl.unlock_hint) || unlockHint,
     watermarkEnabled: true,
     // 模板能力真实状态：从 blueprint 透传，前端据此展示真实/预览，不靠猜。
     templateStatus: bp.template_status,
@@ -206,9 +305,11 @@ function buildFromBlueprint(
     realGeneration: bp.real_generation,
     fallbackMode: bp.fallback_mode,
     boundaryNote: bp.boundary_note,
+    // 结构化传播闭环字段（P0-2）。
+    ...gf,
     inputSummary: text || (input.assetPlaceholder ? '已上传素材' : ''),
     sourceBlueprint: bp.template_id,
-    nextActionHint: bp.unlock_hooks[0] || '分享解锁更多',
+    nextActionHint: (gl && gl.unlock_hint) || bp.unlock_hooks[0] || '分享解锁更多',
   }
 }
 
@@ -259,6 +360,7 @@ async function callRealApi(bp: Blueprint, input: GenerateInput): Promise<Generat
   }
   // 真实结果以后端 preview_type 为准（image / avatar / stickerPack / petVideo）。
   const previewType = (resp.preview_type || r.preview_type || bp.preview_type) as PreviewType
+  const gl = bp.growth_loop
   return {
     id: genId(),
     createdAt: Date.now(),
@@ -273,9 +375,9 @@ async function callRealApi(bp: Blueprint, input: GenerateInput): Promise<Generat
       // pet-talk 等视频预留：后端 video_supported=false 时如实标注
       videoSupported: resp.video_supported !== false ? undefined : false,
     },
-    shareTitle: example.share_title || bp.share_hooks[0] || '看看我生成的结果',
-    shareCopy: example.share_copy || bp.share_hooks[1] || bp.share_hooks[0] || '',
-    unlockHint: example.unlock_hint || bp.unlock_hooks[0] || '分享解锁高清无水印结果',
+    shareTitle: (gl && gl.share_title) || example.share_title || bp.share_hooks[0] || '看看我生成的结果',
+    shareCopy: (gl && gl.share_copy) || example.share_copy || bp.share_hooks[1] || bp.share_hooks[0] || '',
+    unlockHint: (gl && gl.unlock_hint) || example.unlock_hint || bp.unlock_hooks[0] || '分享解锁高清无水印结果',
     watermarkEnabled: true,
     // 核心模板真实链路成功：如实标记 real_generation / template_api。
     templateStatus: bp.template_status || 'core_runnable',
@@ -283,9 +385,11 @@ async function callRealApi(bp: Blueprint, input: GenerateInput): Promise<Generat
     realGeneration: true,
     fallbackMode: false,
     boundaryNote: bp.boundary_note,
+    // 结构化传播闭环字段（P0-2）：真实链路成功时 capability_mode 仍取自事实源（核心模板为 real）。
+    ...growthFields(bp),
     inputSummary: prompt,
     sourceBlueprint: tpl,
-    nextActionHint: bp.unlock_hooks[0] || '分享解锁更多',
+    nextActionHint: (gl && gl.unlock_hint) || bp.unlock_hooks[0] || '分享解锁更多',
   }
 }
 
@@ -306,9 +410,11 @@ function buildApiFailedFallback(
     id: genId(),
     createdAt: Date.now(),
     ...base,
-    // 真实链路失败：不冒充真实生成成功。
+    // 真实链路失败：不冒充真实生成成功。capabilityMode 如实降为 fallback_preview。
     realGeneration: false,
     fallbackMode: true,
+    capabilityMode: 'fallback_preview',
+    capabilityNote: '真实生成暂时不可用，已临时回退本地预览（apiFailed）。',
     apiFailed: true,
     fallbackReason: reason,
     qaHint: '真实生成失败，当前展示为本地预览（apiFailed）',
@@ -406,11 +512,18 @@ export function loadResult(id: string): GeneratedResult | null {
   }
 }
 
-// 解锁（本地 mock）：去水印 + 标记已解锁。
+// 分享解锁（本地 mock）：按 growth_loop 的去水印能力决定能否去水印。
+// 只有 removeWatermarkSupported 时才真正去水印；否则保留水印、仅标记已分享解锁，
+// 不假装去掉一个事实源上「不支持去水印」的水印。
 export function unlockResult(id: string): GeneratedResult | null {
   const r = loadResult(id)
   if (!r) return null
-  r.watermarkEnabled = false
+  // 去水印能力来自结构化事实源（growthLoop.remove_watermark_supported）。
+  const removeSupported = r.removeWatermarkSupported !== false
+  if (removeSupported) {
+    r.watermarkEnabled = false
+  }
+  r.unlocked = true
   saveResult(r)
   return r
 }

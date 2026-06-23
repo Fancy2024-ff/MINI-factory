@@ -141,6 +141,23 @@ def _growth_loop_from_config(template: str, cfg: dict) -> dict:
     return _generic_growth_loop(cfg)
 
 
+def growth_loop_for_template(template: str) -> dict:
+    """按模板名取 growth_loop 事实源（供 growth 文档生成消费，单一事实源）。
+
+    - 模板有 template.json：取/派生其 growth_loop；
+    - 无配置（兜底模板名）：返回通用 growth_loop（real_generation=False 派生）。
+    非法 JSON / 校验失败会抛 BlueprintError（与 build_template_blueprint 口径一致）。
+    """
+    try:
+        cfg = load_template_config(template)
+    except BlueprintError:
+        # 文档生成不应因模板配置问题中断主链路质检，退回通用闭环。
+        return _generic_growth_loop({})
+    if cfg is None:
+        return _generic_growth_loop({})
+    return _growth_loop_from_config(template, cfg)
+
+
 
 # --- template.json schema（单一事实源，GeneratorQA 与 codegen 共用）---
 # top-level 必需键

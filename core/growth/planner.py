@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from core.generator.blueprint_builder import growth_loop_for_template
+
 
 # 题材差异化增长打法。key 对齐 classifier 的 theme / 模板题材。
 # 每条给：增长抓手（angle）、冷启动场景（cold_start）、侧重渠道（channels）、
@@ -95,6 +97,11 @@ def build_growth_plan(app: dict, viral: dict, selection: dict) -> str:
     dims = viral.get("dimensions", {})
     play = _playbook(selection)
 
+    # 传播闭环摘要（来自模板事实源 growth_loop）。这里只做闭环「有没有 / 是否真实」摘要，
+    # 不做 Viral Score 维度解释（那是 P0-3）。
+    template = selection.get("selected_template") or ""
+    gl = growth_loop_for_template(template) if template else {}
+
     # 按传播力分层给不同的增长重心
     if tier == "high":
         focus = "以裂变拉新为主引擎，分享即增长"
@@ -121,6 +128,31 @@ def build_growth_plan(app: dict, viral: dict, selection: dict) -> str:
         f"- 题材抓手：{play['angle']}",
         f"- 裂变位适配度：{reward_hint}（reward_loop={dims.get('reward_loop', 0)}）",
         "",
+    ]
+
+    # 传播闭环摘要（来自模板事实源 growth_loop）：分享/解锁/去水印/品牌/导出 + 能力真实度。
+    if gl:
+        cap = (
+            "fallback / preview（预览结果，非真实成片）"
+            if gl.get("capability_mode") == "fallback_preview"
+            else "real / 真实生成"
+        )
+        lines += [
+            "## 一·B、传播闭环摘要（Growth Loop · 模板事实源）",
+            f"- 分享 CTA：{'有' if gl.get('has_share_cta') else '无'} · {gl.get('share_cta_label', '')}",
+            f"- 解锁机制：{'有' if gl.get('has_unlock') else '无'}（{gl.get('unlock_type', '')}）",
+            f"- 去水印：{'支持' if gl.get('remove_watermark_supported') else '暂不支持'}"
+            f" · {gl.get('remove_watermark_condition', '')}",
+            f"- 品牌露出：{'有' if gl.get('brand_exposure') else '无'} · {gl.get('brand_label', '')}",
+            f"- 下载/导出：{'支持' if gl.get('export_supported') else '导出入口已预留'}"
+            f" · {gl.get('export_label', '')}",
+            f"- 当前能力：{cap}",
+        ]
+        if gl.get("capability_mode") == "fallback_preview":
+            lines.append("- ⚠ 边界：分享/导出的是预览结果，不是真实视频生成。")
+        lines.append("")
+
+    lines += [
         "## 二、冷启动（0 → 1000 用户）",
         f"1. 题材冷启动：{play['cold_start']}",
         "2. 首屏即出结果：降低门槛，让用户 10 秒内产出可分享内容",

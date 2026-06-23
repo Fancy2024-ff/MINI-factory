@@ -19,6 +19,48 @@
       </text>
       <text v-if="result.boundaryNote" class="boundary-note boundary-note--muted">{{ result.boundaryNote }}</text>
 
+      <!-- 醒目 preview mode 提示：capabilityMode === fallback_preview 时强提示当前为预览，非真实成片 -->
+      <view v-if="isPreviewMode" class="preview-banner">
+        <text class="preview-banner-title">⚠ Preview Mode · 预览模式</text>
+        <text class="preview-banner-text">{{ result.capabilityNote || '当前为 honest fallback / preview，分享与导出的是预览结果，非真实视频生成' }}</text>
+      </view>
+
+      <!-- 传播闭环 / Growth Loop：分享 / 解锁 / 水印 / 去水印 / 品牌 / 导出 / 能力，全部来自事实源 -->
+      <view class="growth-loop" v-if="result.growthLoop">
+        <text class="growth-loop-title">传播闭环 · Growth Loop</text>
+        <view class="gl-row">
+          <text class="gl-key">分享 CTA</text>
+          <text class="gl-val">{{ result.hasShareCta ? ('有 · ' + (result.shareCtaLabel || '分享')) : '无' }}</text>
+        </view>
+        <view class="gl-row">
+          <text class="gl-key">解锁机制</text>
+          <text class="gl-val">{{ result.hasUnlock ? ('有 · ' + (result.unlockHint || result.unlockType || '')) : '无' }}</text>
+        </view>
+        <view class="gl-row">
+          <text class="gl-key">水印</text>
+          <text class="gl-val">{{ result.hasWatermark ? ('有 · ' + (result.watermarkLabel || '水印')) : '无' }}</text>
+        </view>
+        <view class="gl-row">
+          <text class="gl-key">去水印</text>
+          <text class="gl-val">{{ result.removeWatermarkSupported ? ('支持 · ' + (result.removeWatermarkCondition || '分享解锁')) : '暂不支持' }}</text>
+        </view>
+        <view class="gl-row">
+          <text class="gl-key">品牌露出</text>
+          <text class="gl-val">{{ result.brandExposure ? ('有 · ' + (result.brandLabel || '')) : '无' }}</text>
+        </view>
+        <view class="gl-row">
+          <text class="gl-key">下载 / 导出</text>
+          <text class="gl-val">{{ result.exportSupported ? ('支持 · ' + (result.exportLabel || '导出')) : '导出入口已预留' }}</text>
+        </view>
+        <view class="gl-row">
+          <text class="gl-key">当前能力</text>
+          <text class="gl-val" :class="isPreviewMode ? 'gl-val--preview' : 'gl-val--real'">
+            {{ isPreviewMode ? 'fallback_preview · 预览模式' : 'real · 真实生成' }}
+          </text>
+        </view>
+        <text v-if="result.capabilityNote" class="gl-note">{{ result.capabilityNote }}</text>
+      </view>
+
 
       <!-- 按 previewType 渲染不同结果形态 -->
       <view class="preview">
@@ -70,7 +112,7 @@
         <block v-else>
           <text class="preview-note">{{ result.previewData.text }}</text>
         </block>
-        <view v-if="result.watermarkEnabled" class="watermark">预览 · 含水印，分享后解锁高清无水印</view>
+        <view v-if="result.watermarkEnabled" class="watermark">{{ watermarkText }}</view>
       </view>
 
       <!-- 分享文案 -->
@@ -81,11 +123,14 @@
 
       <!-- 分享 / 解锁 CTA -->
       <view class="actions">
-        <button class="btn-share" open-type="share">分享作品</button>
-        <button v-if="result.watermarkEnabled" class="btn-unlock" open-type="share" @click="handleUnlock">
-          分享解锁高清/去水印/更多模板
+        <button class="btn-share" open-type="share">{{ result.shareCtaLabel || '分享作品' }}</button>
+        <button v-if="result.watermarkEnabled && result.removeWatermarkSupported !== false" class="btn-unlock" open-type="share" @click="handleUnlock">
+          {{ result.unlockHint || '分享解锁去水印' }}
         </button>
-        <text v-else class="unlocked-tag">✓ 已解锁高清无水印</text>
+        <text v-else-if="!result.watermarkEnabled" class="unlocked-tag">✓ 已解锁高清无水印</text>
+        <button v-if="result.exportSupported" class="btn-export" @click="handleExport">
+          {{ result.exportLabel || '导出 / 下载' }}
+        </button>
       </view>
       <text class="unlock-hint">{{ result.unlockHint }}</text>
 
@@ -124,6 +169,17 @@ const statusLabel = computed(() => {
   return 'honest fallback · preview mode'
 })
 
+// 能力模式：fallback_preview（含 API 失败降级、视频边界型）显示醒目预览提示。
+const isPreviewMode = computed(() =>
+  result.value?.capabilityMode === 'fallback_preview' || result.value?.apiFailed === true,
+)
+
+// 水印文案：优先用事实源 watermarkLabel，回退通用文案。
+const watermarkText = computed(() => {
+  const label = result.value?.watermarkLabel
+  return label ? `预览 · 含「${label}」，分享后解锁去水印` : '预览 · 含水印，分享后解锁高清无水印'
+})
+
 onLoad((options: any) => {
   const id = options?.id ? decodeURIComponent(options.id) : ''
   if (id) {
@@ -131,14 +187,26 @@ onLoad((options: any) => {
   }
 })
 
-// 分享解锁（本地 mock）：解锁后去水印，本地状态变化
+// 分享解锁（本地 mock）：按 growth_loop 去水印能力决定结果，不假装去掉不支持去水印的水印。
 function handleUnlock() {
   if (!result.value) return
   const updated = unlockResult(result.value.id)
   if (updated) {
     result.value = { ...updated }
-    uni.showToast({ title: '已解锁高清无水印', icon: 'success' })
+    const removed = updated.watermarkEnabled === false
+    uni.showToast({
+      title: removed ? '已解锁高清无水印' : '已分享解锁',
+      icon: 'success',
+    })
   }
+}
+
+// 导出 / 下载（入口已预留）：诚实展示当前可导出对象，不假装完成文件下载。
+function handleExport() {
+  if (!result.value) return
+  const label = result.value.exportLabel || '导出'
+  const note = isPreviewMode.value ? '当前可导出预览结果（入口已预留）' : `${label}（入口已预留）`
+  uni.showToast({ title: note, icon: 'none' })
 }
 
 function regenerate() {
@@ -162,6 +230,17 @@ function goHome() {
 .status-line { font-size: 22rpx; color: #555; }
 .boundary-note { font-size: 22rpx; color: #ad6800; display: block; margin-bottom: 12rpx; line-height: 1.5; }
 .boundary-note--muted { color: #8e8e93; }
+.preview-banner { background: #fff1f0; border: 1rpx solid #ffa39e; border-radius: 12rpx; padding: 16rpx 20rpx; margin-bottom: 16rpx; }
+.preview-banner-title { font-size: 26rpx; font-weight: 600; color: #cf1322; display: block; }
+.preview-banner-text { font-size: 22rpx; color: #a8071a; display: block; margin-top: 6rpx; line-height: 1.5; }
+.growth-loop { background: #f0f5ff; border: 1rpx solid #adc6ff; border-radius: 12rpx; padding: 20rpx; margin-bottom: 20rpx; }
+.growth-loop-title { font-size: 26rpx; font-weight: 600; color: #1d39c4; display: block; margin-bottom: 12rpx; }
+.gl-row { display: flex; justify-content: space-between; gap: 16rpx; padding: 5rpx 0; }
+.gl-key { font-size: 22rpx; color: #61616b; flex-shrink: 0; }
+.gl-val { font-size: 22rpx; color: #1d1d1f; text-align: right; flex: 1; }
+.gl-val--real { color: #237804; font-weight: 600; }
+.gl-val--preview { color: #d46b08; font-weight: 600; }
+.gl-note { font-size: 20rpx; color: #8e8e93; display: block; margin-top: 10rpx; line-height: 1.5; }
 .preview { background: #f5f5f7; border-radius: 12rpx; padding: 24rpx; min-height: 160rpx; margin-bottom: 24rpx; position: relative; }
 .preview-note { font-size: 28rpx; color: #333; display: block; margin-bottom: 12rpx; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 12rpx; }
@@ -180,6 +259,7 @@ function goHome() {
 .actions { display: flex; flex-direction: column; gap: 16rpx; }
 .btn-share { background: #07c160; color: #fff; border: none; border-radius: 12rpx; font-size: 28rpx; }
 .btn-unlock { background: #fa8c16; color: #fff; border: none; border-radius: 12rpx; font-size: 28rpx; }
+.btn-export { background: #1d39c4; color: #fff; border: none; border-radius: 12rpx; font-size: 28rpx; }
 .unlocked-tag { font-size: 26rpx; color: #07c160; text-align: center; }
 .unlock-hint { font-size: 22rpx; color: #8e8e93; display: block; margin-top: 16rpx; }
 .footer { display: flex; gap: 16rpx; margin-top: 32rpx; }
