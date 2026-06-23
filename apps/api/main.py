@@ -205,7 +205,7 @@ class TemplateGenerationRequest(BaseModel):
     """模板级生成请求：结构化 input 由 core.generator.template_generation 改写为出图 prompt。"""
 
     template_id: str = "ai-image"
-    input: dict = {}
+    input: dict = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -714,14 +714,68 @@ def get_overview():
 # 防滥用：prompt 长度上限（runtime 接口无管理鉴权，需基础输入约束）。
 MAX_PROMPT_LEN = 2000
 
+# ---------------------------------------------------------------------------
+# 防滥用：public generation 接口的内存限流（IP + 滑动时间窗口）。
+# 这些接口无 dashboard 鉴权且会真实调用 image provider（有成本），上线后若被刷
+# 会直接烧钱，因此加最基础的速率保护。第一版用进程内内存计数，不引入 Redis 等
+# 重依赖；多进程部署下每进程各自计数（仍能挡住单点暴刷）。
+# 仅作用于 runtime 接口；dashboard 管理接口不受影响。
+# ---------------------------------------------------------------------------
+GENERATION_RATE_LIMIT = int(os.environ.get("GENERATION_RATE_LIMIT", "10"))   # 窗口内最多调用次数
+GENERATION_RATE_WINDOW = int(os.environ.get("GENERATION_RATE_WINDOW", "60"))  # 窗口秒数
+
+# key=client ip, value=该 ip 最近调用的时间戳 deque
+_generation_calls: dict[str, deque[float]] = {}
+_generation_rate_lock = __import__("threading").Lock()
+
+
+def _client_ip(request: Request) -> str:
+    """取客户端 IP：优先 X-Forwarded-For 首段（反代场景），否则 socket peer。"""
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limited(request: Request) -> bool:
+    """记录一次调用并判断是否超限。True=超限应拒绝。线程安全。"""
+    now = _time.time()
+    ip = _client_ip(request)
+    with _generation_rate_lock:
+        calls = _generation_calls.get(ip)
+        if calls is None:
+            calls = deque()
+            _generation_calls[ip] = calls
+        # 清掉窗口外的旧时间戳
+        cutoff = now - GENERATION_RATE_WINDOW
+        while calls and calls[0] < cutoff:
+            calls.popleft()
+        if len(calls) >= GENERATION_RATE_LIMIT:
+            return True
+        calls.append(now)
+        return False
+
+
+_RATE_LIMITED_RESPONSE = {
+    "ok": False,
+    "error": {
+        "code": "RATE_LIMITED",
+        "message": "请求过于频繁，请稍后再试",
+        "retryable": True,
+    },
+}
+
 
 @app.post("/api/generation/image")
-def generate_image_endpoint(req: ImageGenerationRequest):
+def generate_image_endpoint(req: ImageGenerationRequest, request: Request):
     """生成产物图片生成 runtime 接口（public，不挂 dashboard 鉴权）。
 
     HTTP adapter：调 core.integrations.image_generation，返回 ok/result 或 ok/error。
     只做适配 + 校验，不含 provider 业务逻辑；不透传 provider 原始错误/key。
     """
+    if _rate_limited(request):
+        return _RATE_LIMITED_RESPONSE
+
     from core.integrations.image_generation import (
         ImageGenerationError,
         ERR_FAILED,
@@ -781,12 +835,15 @@ def generate_image_endpoint(req: ImageGenerationRequest):
 
 
 @app.post("/api/generation/template")
-def generate_template_endpoint(req: TemplateGenerationRequest):
+def generate_template_endpoint(req: TemplateGenerationRequest, request: Request):
     """模板级生成 runtime 接口（public，不挂 dashboard 鉴权）。
 
     白名单 template_id（目前 ai-image + avatar-viral），结构化 input 经
     core.generator.template_generation 改写为出图 prompt。不透传 provider key/原文。
     """
+    if _rate_limited(request):
+        return _RATE_LIMITED_RESPONSE
+
     from core.integrations.image_generation import ImageGenerationError, ERR_FAILED
     from core.generator.template_generation import (
         SUPPORTED_TEMPLATES,

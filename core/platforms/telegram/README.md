@@ -34,3 +34,6 @@ python -m core.platforms.telegram.bot
 - 不打印 base64 原文，不打印完整图片 URL。
 - prompt 长度上限 1000 字符。
 - provider 原始错误不透传给用户，统一转友好提示。
+- 口径说明：受保护的是 provider key / 完整 base64 / 完整 image URL（不记录日志、不写
+  localStorage、不打印）。用户自己输入的描述（prompt）是产品内容，可正常用于页面
+  展示与复制，不在“不展示”之列。

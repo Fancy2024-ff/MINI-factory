@@ -33,7 +33,7 @@ def test_template_unsupported_rejected(server_client):
     client, _ = server_client
     res = client.post(
         "/api/generation/template",
-        json={"template_id": "sticker-viral", "input": {"prompt": "x"}},
+        json={"template_id": "funny-video-viral", "input": {"prompt": "x"}},
     )
     body = res.json()
     assert body["ok"] is False
@@ -98,3 +98,34 @@ def test_template_does_not_break_image_endpoint(server_client, monkeypatch):
     res = client.post("/api/generation/image", json={"template_id": "ai-image", "prompt": "猫"})
     assert res.status_code == 200
     assert res.json()["ok"] is True
+
+
+def test_template_sticker_supported(server_client, monkeypatch):
+    client, _ = server_client
+    import core.integrations.image_generation as image_generation
+
+    monkeypatch.setattr(image_generation, "generate_image", _fake_ok)
+    res = client.post(
+        "/api/generation/template",
+        json={"template_id": "sticker-viral", "input": {"prompt": "打工人", "mood": "搞笑"}},
+    )
+    body = res.json()
+    assert body["ok"] is True
+    assert body["template_id"] == "sticker-viral"
+    assert body["preview_type"] == "stickerPack"
+
+
+def test_template_pet_talk_marks_video_unsupported(server_client, monkeypatch):
+    """pet-talk endpoint 返回须诚实标注 video_supported=False。"""
+    client, _ = server_client
+    import core.integrations.image_generation as image_generation
+
+    monkeypatch.setattr(image_generation, "generate_image", _fake_ok)
+    res = client.post(
+        "/api/generation/template",
+        json={"template_id": "pet-talk-viral", "input": {"prompt": "主人该喂饭啦"}},
+    )
+    body = res.json()
+    assert body["ok"] is True
+    assert body["template_id"] == "pet-talk-viral"
+    assert body["video_supported"] is False
