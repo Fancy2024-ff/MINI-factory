@@ -30,6 +30,7 @@ OUTPUTS_DIR = DATA_DIR / "outputs"
 PLATFORMS_DIR = DATA_DIR / "platforms"
 PLATFORM_AUTH_DIR = DATA_DIR / "platform-auth"
 REAL_INPUTS_DIR = DATA_DIR / "inputs" / "real"
+OPPORTUNITY_DIR = DATA_DIR / "opportunity"
 
 
 def _real_inputs_file() -> Path:
@@ -152,7 +153,11 @@ async def _broadcast(msg: dict, job_id: str = None):
 class PipelineStartRequest(BaseModel):
     # 正式：crawl（抓取生成机会队列）/ queue（消费队列生成）。
     # demo/real 为 dev-only/legacy，仅兼容旧仪表盘。
-    mode: Literal["crawl", "queue", "demo", "real"] = "queue"
+    mode: Literal["crawl", "queue", "auto", "demo", "real"] = "queue"
+    regions: str = "CN,US"
+    platforms: str = "app_store"
+    limit: int | None = 10
+    max_generate: int = 1
 
 
 class RealAppInput(BaseModel):
@@ -243,6 +248,15 @@ async def pipeline_start(req: PipelineStartRequest = PipelineStartRequest()):
         "--mode", req.mode,
         "--job-id", job_id,
     ]
+    if req.mode in ("crawl", "auto"):
+        if req.regions:
+            cmd.extend(["--regions", req.regions])
+        if req.platforms:
+            cmd.extend(["--platforms", req.platforms])
+        if req.limit:
+            cmd.extend(["--limit", str(req.limit)])
+    if req.mode == "auto":
+        cmd.extend(["--max-generate", str(req.max_generate)])
 
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
 
@@ -516,6 +530,82 @@ def get_job_artifact(job_id: str, file: str):
     if file_path.suffix == ".json":
         return json.loads(content)
     return {"content": content}
+
+
+# ---------------------------------------------------------------------------
+# SECTION: Opportunities (crawl outputs)
+# ---------------------------------------------------------------------------
+
+def _read_opportunity_json(name: str, default):
+    path = OPPORTUNITY_DIR / name
+    if not path.exists():
+        return default
+    try:
+        return _read_json(path)
+    except Exception:
+        return default
+
+
+def _limit_items(items, limit: int):
+    if not isinstance(items, list):
+        return []
+    return items[:limit]
+
+
+@app.get("/api/opportunities/summary", dependencies=[Depends(verify_api_key)])
+def get_opportunities_summary(limit: int = Query(default=8, ge=1, le=50)):
+    """Read the latest opportunity crawl outputs for the dashboard."""
+    report = _read_opportunity_json("crawl-report.json", {})
+    queue = _read_opportunity_json("opportunity-queue.json", [])
+    candidates = _read_opportunity_json("candidate-pool.json", [])
+    features = _read_opportunity_json("feature-opportunities.json", [])
+
+    pending = [q for q in queue if q.get("status") == "pending"]
+    produced = [q for q in queue if q.get("status") == "produced"]
+    failed = [q for q in queue if q.get("status") == "failed"]
+
+    top_templates = report.get("feature_stats", {}).get("top_templates", {})
+    if not top_templates:
+        for q in pending:
+            t = q.get("selected_template") or "unknown"
+            top_templates[t] = top_templates.get(t, 0) + 1
+
+    return {
+        "exists": bool(report or queue or candidates or features),
+        "updated_at": report.get("finished_at") or report.get("started_at"),
+        "crawl_stats": report.get("crawl_stats", {}),
+        "dedup_stats": report.get("dedup_stats", {}),
+        "feature_stats": report.get("feature_stats", {}),
+        "queue_stats": {
+            **(report.get("queue_stats", {}) if isinstance(report.get("queue_stats"), dict) else {}),
+            "pending": len(pending),
+            "produced": len(produced),
+            "failed": len(failed),
+            "total": len(queue) if isinstance(queue, list) else 0,
+        },
+        "top_templates": top_templates,
+        "top_queue": _limit_items(pending, limit),
+        "top_candidates": _limit_items(candidates, limit),
+        "top_features": _limit_items(features, limit),
+    }
+
+
+@app.get("/api/opportunities/queue", dependencies=[Depends(verify_api_key)])
+def get_opportunity_queue(limit: int = Query(default=50, ge=1, le=200)):
+    queue = _read_opportunity_json("opportunity-queue.json", [])
+    return {"items": _limit_items(queue, limit), "total": len(queue) if isinstance(queue, list) else 0}
+
+
+@app.get("/api/opportunities/candidates", dependencies=[Depends(verify_api_key)])
+def get_opportunity_candidates(limit: int = Query(default=50, ge=1, le=200)):
+    candidates = _read_opportunity_json("candidate-pool.json", [])
+    return {"items": _limit_items(candidates, limit), "total": len(candidates) if isinstance(candidates, list) else 0}
+
+
+@app.get("/api/opportunities/features", dependencies=[Depends(verify_api_key)])
+def get_opportunity_features(limit: int = Query(default=50, ge=1, le=200)):
+    features = _read_opportunity_json("feature-opportunities.json", [])
+    return {"items": _limit_items(features, limit), "total": len(features) if isinstance(features, list) else 0}
 
 
 # ---------------------------------------------------------------------------

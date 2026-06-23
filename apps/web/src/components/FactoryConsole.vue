@@ -10,7 +10,7 @@ const props = defineProps<{
   job: JobDetail | null
   running: boolean
   logs: string[]
-  livePipelineSteps: PipelineStep[]
+  runtimePipelineSteps: PipelineStep[]
   selectedStepId: string
 }>()
 
@@ -25,8 +25,8 @@ const pipelineReport = computed(() => {
 })
 
 const steps = computed<PipelineStep[]>(() => {
-  if (props.running && props.livePipelineSteps.length > 0) {
-    return props.livePipelineSteps
+  if (props.running && props.runtimePipelineSteps.length > 0) {
+    return props.runtimePipelineSteps
   }
   if (pipelineReport.value?.steps) {
     return pipelineReport.value.steps
@@ -203,7 +203,7 @@ const statusSummary = computed(() => {
         <span class="status-value running-text">{{ currentStep.name }}</span>
       </div>
       <div class="status-dot-wrapper" v-if="running">
-        <span class="status-dot-live"></span>
+        <span class="status-dot-running"></span>
         <span class="status-running-label">运行中</span>
       </div>
     </div>
@@ -295,7 +295,7 @@ const statusSummary = computed(() => {
   margin-left: auto;
 }
 
-.status-dot-live {
+.status-dot-running {
   width: 8px;
   height: 8px;
   border-radius: 50%;

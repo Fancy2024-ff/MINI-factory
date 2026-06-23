@@ -1,4 +1,4 @@
-import type { JobSummary, JobDetail } from '../types/job'
+import type { JobSummary, JobDetail, OpportunitySummary, PipelineMode } from '../types/job'
 
 const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 const WS_BASE = import.meta.env.VITE_WS_BASE_URL || 'ws://localhost:8000'
@@ -52,13 +52,25 @@ export interface PipelineStartResult {
   mode: string
 }
 
+export interface PipelineStartOptions {
+  regions?: string
+  platforms?: string
+  limit?: number
+  max_generate?: number
+}
+
 export const api = {
   getJobs: () => get<{ jobs: JobSummary[] }>('/api/jobs'),
   getLatestJob: () => get<JobDetail>('/api/jobs/latest'),
   getJob: (id: string) => get<JobDetail>(`/api/jobs/${encodeURIComponent(id)}`),
-  startPipeline: (mode: string = 'demo') => post<PipelineStartResult>('/api/pipeline/start', { mode }),
+  startPipeline: (mode: PipelineMode = 'auto', options: PipelineStartOptions = {}) =>
+    post<PipelineStartResult>('/api/pipeline/start', { mode, ...options }),
   stopPipeline: () => post('/api/pipeline/stop'),
   getPipelineStatus: () => get<{ running: boolean; job_id: string | null; log_lines: number }>('/api/pipeline/status'),
+  getOpportunitySummary: () => get<OpportunitySummary>('/api/opportunities/summary'),
+  getOpportunityQueue: () => get<{ items: any[]; total: number }>('/api/opportunities/queue'),
+  getOpportunityCandidates: () => get<{ items: any[]; total: number }>('/api/opportunities/candidates'),
+  getOpportunityFeatures: () => get<{ items: any[]; total: number }>('/api/opportunities/features'),
   getRealInputs: () => get<{ apps: any[]; exists: boolean }>('/api/real-inputs/apps'),
   saveRealInputs: (apps: any[]) => post('/api/real-inputs/apps', apps),
   getPlatforms: () => get<{ platforms: any[]; total: number }>('/api/platforms'),

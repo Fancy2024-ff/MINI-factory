@@ -20,11 +20,11 @@ export interface StepDefinition {
 export const STEP_DEFINITIONS: StepDefinition[] = [
   {
     id: 'market_input', step: 'MarketInput', name: '市场输入', nameEn: 'MarketInput', phase: '数据',
-    purpose: '读取样例、导入或实时搜索到的 App 数据，选出本次生产线要处理的候选 App。',
-    devPurpose: '统一 demo / real / live 三种输入模式，输出 candidate.json。',
-    inputs: ['data/samples/apps.json', 'data/inputs/real/apps.json', 'App Store / Google Play 实时搜索结果'],
-    outputs: ['candidate.json'], codeLocation: 'core/pipeline/runner.py:load_market_input + core/opportunity/scrapers/', rulesLocation: 'core/pipeline/runner.py 输入模式选择逻辑',
-    changeHint: '候选 App 选错：改 load_market_input 的筛选逻辑或 core/opportunity/scrapers。', implType: '规则', automation: '自动读取和筛选输入数据', humanRequired: '生产运行前需要准备真实输入或配置实时数据源',
+    purpose: '读取机会队列、样例或手动导入的 App 数据，选出本次生产线要处理的候选 App。',
+    devPurpose: '统一 crawl / queue / auto 正式主链路与 dev-only 输入兼容，输出 candidate.json。',
+    inputs: ['data/opportunity/opportunity-queue.json', 'data/samples/apps.json [dev-only]', 'data/inputs/real/apps.json [legacy/dev-only]'],
+    outputs: ['candidate.json'], codeLocation: 'core/pipeline/runner.py:load_market_input + core/opportunity/crawl_runner.py', rulesLocation: 'core/pipeline/runner.py 输入模式选择逻辑',
+    changeHint: '候选 App 选错：优先看 opportunity-queue 的来源、feature 拆解和 load_market_input 转换逻辑。', implType: '规则', automation: '自动消费机会队列并读取输入数据', humanRequired: '生产运行只需准备抓取配置；样例/手动导入仅供开发兼容',
   },
   {
     id: 'demand_analysis', step: 'DemandAnalysis', name: '需求分析', nameEn: 'DemandAnalysis', phase: '分析',

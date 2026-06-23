@@ -15,7 +15,14 @@ const emit = defineEmits<{
 
 function getAppName(): string {
   const c = props.currentJob?.artifacts?.['candidate.json']
-  return c?.name_cn || c?.name || '选择应用'
+  return c?.name_cn || c?.name || '机会工厂'
+}
+
+function startLabel(): string {
+  if (props.running) return '运行中'
+  if (props.mode === 'crawl') return '抓取机会'
+  if (props.mode === 'queue') return '生产一条'
+  return '一键生产'
 }
 </script>
 
@@ -23,6 +30,7 @@ function getAppName(): string {
   <nav class="nav">
     <div class="nav-inner">
       <div class="nav-left">
+        <span class="brand-mark"></span>
         <span class="brand">Mini App Factory</span>
       </div>
       <div class="nav-center">
@@ -37,18 +45,23 @@ function getAppName(): string {
         <div class="mode-toggle">
           <button
             class="mode-btn"
-            :class="{ 'mode-btn--active': mode === 'live' }"
-            @click="emit('update:mode', 'live')"
-          >实时分析</button>
+            :class="{ 'mode-btn--active': mode === 'auto' }"
+            @click="emit('update:mode', 'auto')"
+          >Auto</button>
           <button
             class="mode-btn"
-            :class="{ 'mode-btn--active': mode === 'demo' }"
-            @click="emit('update:mode', 'demo')"
-          >Demo</button>
+            :class="{ 'mode-btn--active': mode === 'crawl' }"
+            @click="emit('update:mode', 'crawl')"
+          >Crawl</button>
+          <button
+            class="mode-btn"
+            :class="{ 'mode-btn--active': mode === 'queue' }"
+            @click="emit('update:mode', 'queue')"
+          >Queue</button>
         </div>
         <span class="status-dot" :class="running ? 'status-dot--active' : 'status-dot--idle'"></span>
         <button class="start-btn" :disabled="running" @click="emit('start')">
-          {{ running ? '运行中...' : mode === 'live' ? '启动全链路' : '启动 Demo' }}
+          {{ startLabel() }}
         </button>
       </div>
     </div>
@@ -70,7 +83,7 @@ function getAppName(): string {
 }
 
 .nav-inner {
-  max-width: 960px;
+  max-width: 1240px;
   margin: 0 auto;
   height: 100%;
   display: flex;
@@ -81,6 +94,19 @@ function getAppName(): string {
 
 .nav-left {
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.brand-mark {
+  width: 18px;
+  height: 18px;
+  border-radius: 7px;
+  background:
+    radial-gradient(circle at 65% 25%, #fff 0 12%, transparent 13%),
+    linear-gradient(145deg, #1d1d1f, #6e6e73);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.28), 0 5px 14px rgba(0,0,0,.12);
 }
 
 .brand {
@@ -126,7 +152,7 @@ function getAppName(): string {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 10px;
 }
 
 .mode-toggle {
@@ -143,7 +169,7 @@ function getAppName(): string {
   background: none;
   border: none;
   border-radius: 980px;
-  padding: 4px 10px;
+  padding: 5px 10px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }

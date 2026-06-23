@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { connectPipelineWS } from '../services/api'
+import { api, connectPipelineWS } from '../services/api'
 
 // --- Minimal WebSocket mock ------------------------------------------------
 class MockWS {
@@ -28,6 +28,32 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
+})
+
+describe('api.startPipeline', () => {
+  it('posts auto mode with explicit safe launch options', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ accepted: true, job_id: 'job-1', mode: 'auto' }),
+    } as any)
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.startPipeline('auto', {
+      regions: 'CN,US',
+      platforms: 'app_store',
+      limit: 10,
+      max_generate: 1,
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(JSON.parse(init.body)).toEqual({
+      mode: 'auto',
+      regions: 'CN,US',
+      platforms: 'app_store',
+      limit: 10,
+      max_generate: 1,
+    })
+  })
 })
 
 describe('connectPipelineWS', () => {
