@@ -1,9 +1,14 @@
 ﻿"""
 Capability-domain Pipeline - 从机会发现到小程序生成与增长交付。
-demo 模式读取 data/samples/apps.json，real 模式读取 data/inputs/real/apps.json。
+
+正式主链路：crawl（抓取生成机会队列）→ queue（消费队列生成小程序）→ auto（一键串联）。
+正式数据源 = data/opportunity/opportunity-queue.json（由 core.opportunity.crawl_runner 生成）。
+demo（样例）/ real（手动导入）仅 dev-only/legacy，非主流程。
 
 运行方式:
-    python core/pipeline/runner.py
+    python core/pipeline/runner.py --mode queue          # 消费机会队列（默认）
+    python core/pipeline/runner.py --mode crawl --regions CN,US --platforms app_store
+    python -m core.pipeline.auto_runner --regions CN --platforms app_store --max-generate 1
 
 不依赖 LLM，使用本地规则和模板。
 """
@@ -29,6 +34,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 SAMPLES_DIR = DATA_DIR / "samples"
 REAL_INPUTS_DIR = DATA_DIR / "inputs" / "real"
 OUTPUTS_DIR = DATA_DIR / "outputs"
+OPPORTUNITY_DIR = DATA_DIR / "opportunity"
 
 # 业务能力域：pipeline 只编排，规则/策略/QA 在 core/* 各域（单一事实源）。
 from core.opportunity.scoring import compute_opportunity_score
@@ -72,13 +78,16 @@ def step_done(output_path: str, duration: float):
 _pipeline_steps: list[dict] = []
 _pipeline_output_dir: Path = Path(".")
 _pipeline_job_id: str = ""
+# queue 模式下当前消费的队列项（用于运行后更新 queue/processed）。
+_active_queue_item: dict | None = None
 _report_meta: dict = {
     "started_at": None,
     "finished_at": None,
     "total_passed": None,
     "error": None,
-    "mode": "demo",
-    "data_source": "demo_rule_based",
+    "mode": "queue",
+    "data_source": "opportunity_queue",
+    "source": "crawl_generated_opportunity",
 }
 
 
@@ -88,6 +97,7 @@ def _flush_pipeline_report():
         "job_id": _pipeline_job_id,
         "mode": _report_meta["mode"],
         "data_source": _report_meta["data_source"],
+        "source": _report_meta.get("source", ""),
         "started_at": _report_meta["started_at"],
         "finished_at": _report_meta["finished_at"],
         "total_passed": _report_meta["total_passed"],
@@ -200,10 +210,29 @@ def _normalize_app(app: dict) -> dict:
     return app
 
 
-def load_market_input(mode: str = "demo") -> list[dict]:
-    """读取 App 数据。demo=样例, real=导入数据, live=实时抓取 App Store + Google Play。"""
-    if mode == "live":
-        return _fetch_live_apps()
+def load_market_input(mode: str = "queue") -> list[dict]:
+    """读取 App 数据。
+
+    正式：queue=从 opportunity-queue 消费 feature 级机会（主链路）。
+    dev-only：demo=样例数据（仅本地开发/测试，非主流程）。
+    legacy/dev-only：real=手动导入 data/inputs/real（兼容旧 API 测试，非主流程）。
+    注意：旧 live 模式已移除；实时抓取统一走 core.opportunity.crawl_runner。
+    """
+    if mode == "queue":
+        # queue 逻辑在 core.opportunity.opportunity_queue；runner 只调用。
+        from core.opportunity import opportunity_queue as oq
+
+        queue = oq.load_queue(OPPORTUNITY_DIR / "opportunity-queue.json")
+        item = oq.pop_next_pending(queue)
+        if item is None:
+            raise ValueError(
+                "opportunity-queue.json 无 pending 项。先跑 "
+                "python -m core.opportunity.crawl_runner --mode once（或 --mode auto）生成队列。"
+            )
+        global _active_queue_item
+        _active_queue_item = item
+        app_input = oq.queue_item_to_app_input(item)
+        return [_normalize_app(app_input)]
     elif mode == "real":
         apps_file = REAL_INPUTS_DIR / "apps.json"
         if not apps_file.exists():
@@ -265,52 +294,6 @@ def select_best_candidate(apps: list[dict]) -> tuple[dict, dict, dict, list[tupl
     return best_app, best_analysis, best_viral, scored
 
 
-def _fetch_live_apps() -> list[dict]:
-    """实时从 App Store + Google Play 抓取 AI 类 App。"""
-    from core.opportunity.scrapers.appstore import fetch_ai_apps_appstore
-    from core.opportunity.scrapers.googleplay import fetch_ai_apps_googleplay
-
-    print("  [Live] 正在从 App Store 抓取...")
-    appstore_apps = fetch_ai_apps_appstore(category="ai", limit=20)
-    print(f"  [Live] App Store: 获取 {len(appstore_apps)} 个 App")
-
-    print("  [Live] 正在从 Google Play 抓取...")
-    gp_apps = fetch_ai_apps_googleplay(category="ai", limit=20)
-    print(f"  [Live] Google Play: 获取 {len(gp_apps)} 个 App")
-
-    # Merge and dedup
-    seen = set()
-    all_apps = []
-    for app in appstore_apps + gp_apps:
-        name_lower = app.name.lower()
-        if name_lower in seen:
-            continue
-        seen.add(name_lower)
-        all_apps.append({
-            "name": app.name,
-            "name_cn": app.name,  # Will be translated by LLM later
-            "app_id": app.app_id,
-            "source": app.source.value if hasattr(app.source, 'value') else str(app.source),
-            "category": app.category,
-            "description": app.description[:300],
-            "description_cn": app.description[:300],
-            "downloads": app.downloads,
-            "rating": app.rating,
-            "review_count": 0,
-            "features": app.features if hasattr(app, 'features') else [],
-            "monetization": "freemium",
-        })
-
-    # Sort by downloads, take top 10
-    all_apps.sort(key=lambda a: a.get("downloads", 0), reverse=True)
-    top_apps = all_apps[:10]
-    print(f"  [Live] 合并去重后 Top 10:")
-    for a in top_apps:
-        print(f"    {a['name']} | {a['downloads']:,} downloads | {a['rating']:.1f}⭐")
-
-    return [_normalize_app(a) for a in top_apps]
-
-
 def _write(path: Path, content: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     # Use BOM only for .md files (Windows Notepad compatibility)
@@ -324,13 +307,74 @@ def _write(path: Path, content: str):
 # MAIN PIPELINE
 # ═══════════════════════════════════════════════════════════════
 
+def _update_queue_after_run(job_id: str, success: bool, error: str | None = None) -> None:
+    """queue 模式运行后更新 opportunity-queue.json 与 processed-apps.json。
+
+    具体读写逻辑在 core.opportunity.opportunity_queue / processed_apps；runner 只调用。
+    """
+    item = _active_queue_item
+    if not item:
+        return
+    from core.opportunity import opportunity_queue as oq
+    from core.opportunity import processed_apps
+
+    queue_path = OPPORTUNITY_DIR / "opportunity-queue.json"
+    processed_path = OPPORTUNITY_DIR / "processed-apps.json"
+    feature_key = item.get("feature_key", "")
+    parent_key = item.get("parent_app_key", "")
+
+    queue = oq.load_queue(queue_path)
+    processed = processed_apps.load_processed(processed_path)
+
+    if success:
+        oq.update_status(queue, item.get("queue_id", ""), "produced")
+        processed_apps.mark_produced(processed, feature_key, parent_key, job_id)
+    else:
+        oq.update_status(queue, item.get("queue_id", ""), "failed", error=error)
+        processed_apps.mark_failed(processed, feature_key, parent_key, error or "pipeline failed")
+
+    oq.save_queue(queue_path, queue)
+    processed_apps.save_processed(processed_path, processed)
+    p(f"  队列更新: {item.get('queue_id')} → {'produced' if success else 'failed'}")
+
+
 def main():
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["demo", "real", "live"], default="demo", help="demo: sample data, real: imported data, live: scrape App Store + Google Play")
+    parser = argparse.ArgumentParser(
+        description="Mini App Factory pipeline. 正式入口：crawl / queue / auto。"
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["crawl", "queue", "auto", "demo", "real"],
+        default="queue",
+        help=("crawl: 只抓取生成 opportunity-queue；queue: 消费队列生成小程序（默认）；"
+              "auto: 先 crawl 再消费队列；demo: 样例数据 [dev-only，非主流程]；"
+              "real: 手动导入 data/inputs/real [legacy/dev-only，非主流程]"),
+    )
     parser.add_argument("--job-id", default=None, help="Pre-assigned job ID (from server)")
+    parser.add_argument("--regions", default="", help="crawl/auto: 地区，逗号分隔，如 CN,US")
+    parser.add_argument("--platforms", default="", help="crawl/auto: 平台，逗号分隔")
+    parser.add_argument("--limit", type=int, default=None, help="crawl/auto: 每请求条数")
+    parser.add_argument("--max-generate", type=int, default=1, help="auto: 最多生成几个（v1=1）")
     args = parser.parse_args()
     mode = args.mode
+
+    # crawl / auto 委托给独立编排（抓取实现仍在 core.opportunity，runner 不重写）。
+    if mode == "crawl":
+        from core.opportunity import crawl_runner
+        _regions = [r.strip().upper() for r in args.regions.split(",") if r.strip()] or None
+        _platforms = [p.strip() for p in args.platforms.split(",") if p.strip()] or None
+        rep = crawl_runner.run_once(regions=_regions, platforms=_platforms, limit=args.limit)
+        c = rep.get("counts", {})
+        p(f"[crawl] candidates={c.get('candidates')} queue_pending={c.get('queue_pending')}")
+        return
+    if mode == "auto":
+        from core.pipeline import auto_runner
+        auto_runner.run_auto(
+            job_id=args.job_id, regions=args.regions, platforms=args.platforms,
+            limit=args.limit, max_generate=args.max_generate,
+        )
+        return
 
     p("=" * 60)
     p(f"  Mini App Factory - Pipeline ({mode} mode)")
@@ -349,7 +393,16 @@ def main():
     _pipeline_output_dir = output_dir
     _pipeline_job_id = job_id
     _report_meta["mode"] = mode
-    _report_meta["data_source"] = "demo_rule_based" if mode == "demo" else "real_import_manual"
+    # 正式 queue 模式数据源来自爬取生成的机会队列；demo/real 标 dev-only/legacy。
+    if mode == "queue":
+        _report_meta["data_source"] = "opportunity_queue"
+        _report_meta["source"] = "crawl_generated_opportunity"
+    elif mode == "demo":
+        _report_meta["data_source"] = "dev_only"
+        _report_meta["source"] = "demo_sample"
+    else:  # real
+        _report_meta["data_source"] = "legacy"
+        _report_meta["source"] = "manual_import"
     _report_meta["started_at"] = None
     _report_meta["finished_at"] = None
     _report_meta["total_passed"] = None
@@ -360,6 +413,8 @@ def main():
     try:
         qa = _run_pipeline_steps(mode, job_id, output_dir)
         finalize_pipeline_report(total_passed=bool(qa.get("passed")))
+        if mode == "queue":
+            _update_queue_after_run(job_id, success=bool(qa.get("passed")))
     except SystemExit:
         raise
     except Exception as e:
@@ -372,6 +427,8 @@ def main():
             step_end(error=str(e), error_code="pipeline_exception",
                      user_message=user_msg, developer_message=tb[-1500:])
         finalize_pipeline_report(total_passed=False, error=str(e))
+        if mode == "queue":
+            _update_queue_after_run(job_id, success=False, error=str(e))
         # Structured failure event for the dashboard WS.
         p(json.dumps({
             "event": "pipeline_failed",

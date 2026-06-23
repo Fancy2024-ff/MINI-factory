@@ -150,7 +150,9 @@ async def _broadcast(msg: dict, job_id: str = None):
 # ---------------------------------------------------------------------------
 
 class PipelineStartRequest(BaseModel):
-    mode: Literal["demo", "real", "live"] = "demo"
+    # 正式：crawl（抓取生成机会队列）/ queue（消费队列生成）。
+    # demo/real 为 dev-only/legacy，仅兼容旧仪表盘。
+    mode: Literal["crawl", "queue", "demo", "real"] = "queue"
 
 
 class RealAppInput(BaseModel):
