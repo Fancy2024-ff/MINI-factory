@@ -309,6 +309,56 @@ def test_avatar_command_no_base64_or_key_leak():
         assert TINY_PNG_B64 not in caption
 
 
+# --- /sticker 命令 ---------------------------------------------------------
+
+def test_sticker_command_missing_prompt():
+    c = FakeClient()
+    bot_mod.handle_update(c, _msg_update("/sticker   "))
+    assert len(c.messages) == 1
+    assert c.messages[0][1] == bot_mod.STICKER_EMPTY_HINT
+    assert not c.photos_bytes
+
+
+def test_sticker_command_generates_photo_via_adapter():
+    captured = {}
+
+    def gen(prompt, **kw):
+        captured["prompt"] = prompt
+        return _ok_base64(prompt, **kw)
+
+    c = FakeClient()
+    bot_mod.handle_update(c, _msg_update("/sticker 打工人 怼人专用"), generate=gen)
+    assert len(c.photos_bytes) == 1
+    # 走 sticker adapter：出图 prompt 含 sticker 方向词 + 原始主题
+    assert "sticker" in captured["prompt"].lower()
+    assert "打工人 怼人专用" in captured["prompt"]
+
+
+# --- /pettalk 命令 ---------------------------------------------------------
+
+def test_pettalk_command_missing_prompt():
+    c = FakeClient()
+    bot_mod.handle_update(c, _msg_update("/pettalk   "))
+    assert len(c.messages) == 1
+    assert c.messages[0][1] == bot_mod.PETTALK_EMPTY_HINT
+    assert not c.photos_bytes
+
+
+def test_pettalk_command_generates_photo_via_adapter():
+    captured = {}
+
+    def gen(prompt, **kw):
+        captured["prompt"] = prompt
+        return _ok_base64(prompt, **kw)
+
+    c = FakeClient()
+    bot_mod.handle_update(c, _msg_update("/pettalk 主人该喂饭啦"), generate=gen)
+    assert len(c.photos_bytes) == 1
+    # 走 pet-talk adapter：出图 prompt 含 pet 方向词 + 台词
+    assert "pet" in captured["prompt"].lower()
+    assert "主人该喂饭啦" in captured["prompt"]
+
+
 # ── 进度条相关 ────────────────────────────────────────────────
 
 def test_progress_message_sent_then_deleted_on_success():

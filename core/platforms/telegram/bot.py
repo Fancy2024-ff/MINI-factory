@@ -17,7 +17,7 @@ import threading
 from typing import Any, Callable
 
 from core.integrations.image_generation import ImageGenerationError, generate_image
-from core.generator.template_generation import build_avatar_prompt
+from core.generator.template_generation import generate_template
 from core.platforms.telegram.api import TelegramAPIError, TelegramClient
 
 logger = logging.getLogger("telegram.bot")
@@ -53,20 +53,26 @@ START_TEXT = (
     "命令：\n"
     "  /image <描述>  生成图片\n"
     "  /avatar <人物描述>  生成 AI 头像\n"
+    "  /sticker <表情主题>  生成表情包\n"
+    "  /pettalk <宠物台词>  宠物说话预览（静态，视频预留）\n"
     "  /help  查看示例"
 )
 
 HELP_TEXT = (
     "🖼 用法示例：\n\n"
     "  /image 海边日落，油画风格\n"
-    "  /image 一只穿宇航服的猫，3D 卡通\n"
-    "  /avatar 25 岁短发女生，简约时尚，自信微笑\n\n"
+    "  /avatar 25 岁短发女生，简约时尚，自信微笑\n"
+    "  /sticker 打工人 怼人专用\n"
+    "  /pettalk 主人，该喂饭啦！\n\n"
     "也可以直接发描述文字（不带命令）生成图片。\n"
+    "注：/pettalk 当前生成静态预览图，真实说话视频为流程预留。\n"
     f"描述长度上限 {MAX_PROMPT_LEN} 字符。"
 )
 
 EMPTY_PROMPT_HINT = "请在命令后输入图片描述，例如：/image 一只戴帽子的猫"
 AVATAR_EMPTY_HINT = "请在命令后输入人物描述，例如：/avatar 25 岁短发女生，简约时尚"
+STICKER_EMPTY_HINT = "请在命令后输入表情主题，例如：/sticker 打工人 怼人专用"
+PETTALK_EMPTY_HINT = "请在命令后输入宠物台词，例如：/pettalk 主人，该喂饭啦！"
 NOT_CONFIGURED_HINT = "图片生成服务暂未配置，请稍后再试。"
 PROVIDER_FAILED_HINT = "图片生成失败，请换个描述或稍后再试。"
 TOO_LONG_HINT = f"描述太长啦，请控制在 {MAX_PROMPT_LEN} 字符以内。"
@@ -74,6 +80,13 @@ DECODE_FAILED_HINT = "图片生成结果异常，请稍后再试。"
 
 # provider 错误码 -> 用户友好提示（不透传 provider 原文）
 _NOT_CONFIGURED_CODES = {"IMAGE_GENERATION_NOT_CONFIGURED"}
+
+# 模板命令分发表：(命令前缀, template_id, 空输入提示)。三命令同源走 generate_template。
+_TEMPLATE_COMMANDS = (
+    ("/avatar", "avatar-viral", AVATAR_EMPTY_HINT),
+    ("/sticker", "sticker-viral", STICKER_EMPTY_HINT),
+    ("/pettalk", "pet-talk-viral", PETTALK_EMPTY_HINT),
+)
 
 
 def _resolve_webapp_url(webapp_url: str | None) -> str:
@@ -173,18 +186,26 @@ def handle_update(
     if stripped.startswith("/help"):
         client.send_message(chat_id, HELP_TEXT)
         return
-    if stripped.startswith("/avatar"):
-        subject = stripped[len("/avatar"):].strip()
-        if not subject:
-            client.send_message(chat_id, AVATAR_EMPTY_HINT)
+    # 三端同源的模板命令：/avatar /sticker /pettalk 统一走
+    # core.generator.template_generation 的对应 adapter（与 WebApp / API 同一条链路），
+    # 把统一返回的 result 适配成 _generate_and_reply 期望的扁平结构，复用进度条/发图。
+    for cmd, template_id, empty_hint in _TEMPLATE_COMMANDS:
+        if stripped.startswith(cmd):
+            subject = stripped[len(cmd):].strip()
+            if not subject:
+                client.send_message(chat_id, empty_hint)
+                return
+            if len(subject) > MAX_PROMPT_LEN:
+                client.send_message(chat_id, TOO_LONG_HINT)
+                return
+
+            def _tmpl_generate(_ignored: str, _tid: str = template_id, _subj: str = subject,
+                               **_kw: Any) -> dict[str, Any]:
+                out = generate_template(_tid, {"prompt": _subj}, generate=generate)
+                return out.get("result", {})
+
+            _generate_and_reply(client, chat_id, subject, _tmpl_generate, resolved_webapp, progress_interval)
             return
-        if len(subject) > MAX_PROMPT_LEN:
-            client.send_message(chat_id, TOO_LONG_HINT)
-            return
-        # 用 avatar adapter 把人物描述改写为头像出图 prompt，再走统一生成回复。
-        avatar_prompt = build_avatar_prompt({"prompt": subject})
-        _generate_and_reply(client, chat_id, avatar_prompt, generate, resolved_webapp, progress_interval)
-        return
 
     prompt, is_command = extract_prompt(stripped)
     if is_command and not prompt:

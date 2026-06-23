@@ -23,8 +23,14 @@ export interface TemplateGenerationInput {
   aspect_ratio?: AspectRatio
 }
 
+export type TemplateId =
+  | 'ai-image'
+  | 'avatar-viral'
+  | 'sticker-viral'
+  | 'pet-talk-viral'
+
 export interface TemplateGenerationRequest {
-  template_id: 'ai-image' | 'avatar-viral'
+  template_id: TemplateId
   input: TemplateGenerationInput
 }
 
@@ -42,6 +48,8 @@ export interface TemplateGenerationResponse {
   ok: boolean
   template_id?: string
   preview_type?: string
+  // pet-talk 等：显式标注当前是否产出真实视频（false=仅静态预览，流程预留）。
+  video_supported?: boolean
   result?: TemplateResult
   error?: ApiError
 }

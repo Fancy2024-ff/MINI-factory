@@ -15,9 +15,11 @@ def _fake_ok(prompt, style="", aspect_ratio="1:1"):
 def test_supported_templates_whitelist():
     assert "ai-image" in tg.SUPPORTED_TEMPLATES
     assert "avatar-viral" in tg.SUPPORTED_TEMPLATES
+    assert "sticker-viral" in tg.SUPPORTED_TEMPLATES
+    assert "pet-talk-viral" in tg.SUPPORTED_TEMPLATES
     # 不应包含本轮未做的模板
-    assert "sticker-viral" not in tg.SUPPORTED_TEMPLATES
     assert "funny-video-viral" not in tg.SUPPORTED_TEMPLATES
+    assert "blessing-video-viral" not in tg.SUPPORTED_TEMPLATES
 
 
 def test_build_avatar_prompt_includes_subject_and_style():
@@ -53,8 +55,47 @@ def test_generate_template_ai_image_passthrough():
 
 def test_generate_template_unsupported_raises():
     with pytest.raises(ImageGenerationError) as ei:
-        tg.generate_template("sticker-viral", {"prompt": "x"}, generate=_fake_ok)
+        tg.generate_template("funny-video-viral", {"prompt": "x"}, generate=_fake_ok)
     assert ei.value.code == "UNSUPPORTED_TEMPLATE"
+
+
+# --- sticker-viral ---------------------------------------------------------
+
+def test_build_sticker_prompt_includes_theme_and_mood():
+    p = tg.build_sticker_prompt({"prompt": "打工人", "mood": "搞笑"})
+    assert "打工人" in p
+    assert "sticker" in p.lower()  # 表情包方向锚定
+    assert "funny" in p.lower()    # 情绪映射片段
+
+
+def test_generate_template_sticker_returns_unified_structure():
+    out = tg.generate_template("sticker-viral", {"prompt": "猫猫", "mood": "可爱"}, generate=_fake_ok)
+    assert out["ok"] is True
+    assert out["template_id"] == "sticker-viral"
+    assert out["preview_type"] == "stickerPack"
+    r = out["result"]
+    assert r["title"] == "表情包已生成"
+    assert r["image_base64"] == "QUJD"
+    assert r["prompt"] == "猫猫"
+
+
+# --- pet-talk-viral --------------------------------------------------------
+
+def test_build_pet_talk_prompt_includes_line():
+    p = tg.build_pet_talk_prompt({"prompt": "主人该喂饭啦"})
+    assert "主人该喂饭啦" in p
+    assert "pet" in p.lower()
+
+
+def test_generate_template_pet_talk_marks_video_unsupported():
+    """诚实边界：pet-talk 当前不产出真实视频，返回须显式标注 video_supported=False。"""
+    out = tg.generate_template("pet-talk-viral", {"prompt": "你好呀"}, generate=_fake_ok)
+    assert out["ok"] is True
+    assert out["template_id"] == "pet-talk-viral"
+    assert out["preview_type"] == "petVideo"
+    assert out["video_supported"] is False  # 不虚假承诺视频
+    assert "预留" in out["result"]["title"]
+    assert out["result"]["prompt"] == "你好呀"
 
 
 def test_generate_template_missing_prompt_raises():

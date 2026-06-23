@@ -26,6 +26,24 @@
         <div class="badge badge-new">新上线</div>
       </button>
 
+      <button class="card card-open" @click="openSticker">
+        <div class="card-icon">😄</div>
+        <div class="card-body">
+          <div class="card-title">表情包工厂</div>
+          <div class="card-desc">一个主题，生成一组搞怪贴纸</div>
+        </div>
+        <div class="badge badge-new">新上线</div>
+      </button>
+
+      <button class="card card-open" @click="openPetTalk">
+        <div class="card-icon">🐶</div>
+        <div class="card-body">
+          <div class="card-title">宠物说话</div>
+          <div class="card-desc">配一句台词，生成会说话的宠物预览</div>
+        </div>
+        <div class="badge badge-new">新上线</div>
+      </button>
+
       <div v-for="item in upcoming" :key="item.id" class="card card-soon">
         <div class="card-icon">{{ item.icon }}</div>
         <div class="card-body">
@@ -44,8 +62,6 @@
 const emit = defineEmits<{ (e: 'navigate', path: string): void }>()
 
 const upcoming = [
-  { id: 'sticker', icon: '😄', title: '表情包', desc: '一个主题，生成一组贴纸' },
-  { id: 'pet', icon: '🐶', title: '宠物说话', desc: '让你的宠物开口讲话' },
   { id: 'blessing', icon: '🎉', title: '祝福卡片', desc: '节日祝福，一键生成' },
 ]
 
@@ -55,6 +71,14 @@ function openAiImage() {
 
 function openAvatar() {
   emit('navigate', '/tg/avatar')
+}
+
+function openSticker() {
+  emit('navigate', '/tg/sticker')
+}
+
+function openPetTalk() {
+  emit('navigate', '/tg/pet-talk')
 }
 </script>
 

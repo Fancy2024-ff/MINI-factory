@@ -4,6 +4,8 @@
     <TgHome v-if="route === '/tg'" @navigate="navigate" />
     <AiImagePage v-else-if="route === '/tg/ai-image'" @navigate="navigate" />
     <AvatarPage v-else-if="route === '/tg/avatar'" @navigate="navigate" />
+    <StickerPage v-else-if="route === '/tg/sticker'" @navigate="navigate" />
+    <PetTalkPage v-else-if="route === '/tg/pet-talk'" @navigate="navigate" />
     <TgHome v-else @navigate="navigate" />
   </div>
 </template>
@@ -13,6 +15,8 @@ import { ref, onMounted } from 'vue'
 import TgHome from './TgHome.vue'
 import AiImagePage from './AiImagePage.vue'
 import AvatarPage from './AvatarPage.vue'
+import StickerPage from './StickerPage.vue'
+import PetTalkPage from './PetTalkPage.vue'
 import { initTelegram } from './telegram'
 import { normalizeRoute } from './route'
 

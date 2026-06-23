@@ -18,7 +18,7 @@ from core.integrations import image_generation
 from core.integrations.image_generation import ImageGenerationError
 
 # 公开模板白名单（runtime endpoint 也据此校验）。
-SUPPORTED_TEMPLATES = ("ai-image", "avatar-viral")
+SUPPORTED_TEMPLATES = ("ai-image", "avatar-viral", "sticker-viral", "pet-talk-viral")
 
 MAX_PROMPT_LEN = 2000
 
@@ -83,6 +83,61 @@ def _avatar_caption(inp: dict[str, Any]) -> str:
     return f"{base}（{suffix}）" if suffix else base
 
 
+# 表情包情绪 -> 出图风格片段。
+_STICKER_MOOD = {
+    "搞笑": "funny and humorous",
+    "可爱": "cute and adorable",
+    "暴躁": "grumpy and sassy",
+    "治愈": "warm and healing",
+}
+
+
+def build_sticker_prompt(inp: dict[str, Any]) -> str:
+    """把表情主题 + 情绪合成「一组表情包贴纸」出图 prompt。
+
+    方向：贴纸 / 表情包风格、白底、卡通、成套同款角色；
+    一张图里多个表情格（sticker sheet），适合做群聊表情。
+    """
+    theme = (inp.get("prompt") or inp.get("theme") or "").strip()
+    mood = (inp.get("mood") or "").strip()
+    parts = [
+        "cute sticker pack sheet",
+        "multiple chibi expressions of the same character in a grid",
+        "flat cartoon style, bold outline, white background",
+        theme,
+        _STICKER_MOOD.get(mood, mood),
+        "die-cut sticker look, vivid, clean, no text",
+    ]
+    return ", ".join(p for p in parts if p)
+
+
+def _sticker_caption(inp: dict[str, Any]) -> str:
+    theme = (inp.get("prompt") or inp.get("theme") or "").strip()
+    mood = (inp.get("mood") or "").strip()
+    return f"{theme}（{mood}）" if mood else theme
+
+
+def build_pet_talk_prompt(inp: dict[str, Any]) -> str:
+    """把宠物台词合成「会说话的宠物」视频封面图 prompt。
+
+    重要边界：当前没有真实视频/配音生成能力，这里产出的是一张「视频封面/海报」
+    静态图（宠物 + 说话气泡感），真实视频生成为流程预留。adapter 不承诺出视频。
+    """
+    line = (inp.get("prompt") or inp.get("line") or "").strip()
+    parts = [
+        "cute pet portrait, expressive talking pose, mouth open as if speaking",
+        "speech-bubble friendly composition, social video poster style",
+        f"saying: {line}" if line else "",
+        "warm lighting, high quality, vertical poster framing",
+    ]
+    return ", ".join(p for p in parts if p)
+
+
+def _pet_talk_caption(inp: dict[str, Any]) -> str:
+    line = (inp.get("prompt") or inp.get("line") or "").strip()
+    return f"台词：{line}" if line else "宠物说话"
+
+
 def generate_template(
     template_id: str,
     inp: dict[str, Any],
@@ -120,6 +175,42 @@ def generate_template(
                 "image_base64": result.get("image_base64"),
                 "title": "AI 头像已生成",
                 "caption": _avatar_caption(inp),
+                "prompt": raw_prompt,
+                "metadata": result.get("metadata", {}),
+            },
+        }
+
+    if template_id == "sticker-viral":
+        final_prompt = build_sticker_prompt(inp)
+        result = generate(final_prompt, style=(inp.get("style") or ""), aspect_ratio=aspect_ratio)
+        return {
+            "ok": True,
+            "template_id": "sticker-viral",
+            "preview_type": "stickerPack",
+            "result": {
+                "image_url": result.get("image_url"),
+                "image_base64": result.get("image_base64"),
+                "title": "表情包已生成",
+                "caption": _sticker_caption(inp),
+                "prompt": raw_prompt,
+                "metadata": result.get("metadata", {}),
+            },
+        }
+
+    if template_id == "pet-talk-viral":
+        # 边界：当前产出「会说话的宠物」视频封面静态图，真实视频/配音为流程预留。
+        final_prompt = build_pet_talk_prompt(inp)
+        result = generate(final_prompt, style=(inp.get("style") or ""), aspect_ratio=aspect_ratio)
+        return {
+            "ok": True,
+            "template_id": "pet-talk-viral",
+            "preview_type": "petVideo",
+            "video_supported": False,  # 诚实标注：暂不产出真实视频，仅静态封面预览
+            "result": {
+                "image_url": result.get("image_url"),
+                "image_base64": result.get("image_base64"),
+                "title": "宠物说话预览（视频生成为流程预留）",
+                "caption": _pet_talk_caption(inp),
                 "prompt": raw_prompt,
                 "metadata": result.get("metadata", {}),
             },

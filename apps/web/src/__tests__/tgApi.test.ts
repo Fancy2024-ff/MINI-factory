@@ -17,6 +17,12 @@ describe('tg route normalize', () => {
     expect(normalizeRoute('/tg/avatar')).toBe('/tg/avatar')
     expect(normalizeRoute('/tg/avatar/')).toBe('/tg/avatar')
   })
+  it('maps sticker and pet-talk routes', () => {
+    expect(normalizeRoute('/tg/sticker')).toBe('/tg/sticker')
+    expect(normalizeRoute('/tg/sticker/')).toBe('/tg/sticker')
+    expect(normalizeRoute('/tg/pet-talk')).toBe('/tg/pet-talk')
+    expect(normalizeRoute('/tg/pet-talk/')).toBe('/tg/pet-talk')
+  })
   it('falls back unknown to /tg', () => {
     expect(normalizeRoute('/tg/unknown')).toBe('/tg')
     expect(normalizeRoute('/other')).toBe('/tg')
