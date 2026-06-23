@@ -1,0 +1,18 @@
+{
+  "_comment": "示例：运行时 processed-apps.json 的结构（记录 feature 级生产状态，防重复生产）。真实文件由 pipeline 运行时生成，不入库。",
+  "features": {
+    "app_store:123456789:ai_photo_retouch": {
+      "status": "produced",
+      "parent_app_key": "app_store:123456789",
+      "job_id": "20260623-abc123",
+      "produced_at": "2026-06-23T10:00:00+00:00"
+    },
+    "app_store:123456789:background_remover": {
+      "status": "failed",
+      "parent_app_key": "app_store:123456789",
+      "retry_count": 1,
+      "last_error": "build failed: ...",
+      "failed_at": "2026-06-23T10:05:00+00:00"
+    }
+  }
+}

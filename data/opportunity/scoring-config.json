@@ -1,0 +1,15 @@
+{
+  "weights": {
+    "parent_app_demand": 0.25,
+    "market_presence": 0.20,
+    "miniapp_fit": 0.20,
+    "viral": 0.20,
+    "implementation": 0.10,
+    "risk": 0.05
+  },
+  "filters": {
+    "min_rating": 3.8,
+    "skip_processed_features": true,
+    "max_retry_count": 2
+  }
+}
