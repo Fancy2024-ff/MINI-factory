@@ -34,17 +34,64 @@ def _text(app: dict) -> str:
         app.get("description_cn", ""),
         " ".join(app.get("features", []) or []),
         " ".join(app.get("features_cn", []) or []),
+        # feature 级输入：功能名 / 父 App / 拆分理由也参与题材判断
+        app.get("feature_name", ""), app.get("feature_name_cn", ""),
+        " ".join(app.get("reason", []) or []),
     ]
     return " ".join(parts).lower()
+
+
+# 上游可直接给定模板（FeatureOpportunity.selected_template / classifier 已选）。
+# 这些是 generator 真实支持的模板目录名，尊重上游时需在白名单内。
+_KNOWN_TEMPLATES = {
+    "ai-tool", "ai-chat", "ai-image",
+    "avatar-viral", "sticker-viral", "pet-talk-viral",
+    "funny-video-viral", "blessing-video-viral",
+}
+# 模板 -> 题材标签（尊重上游时回填展示用），与 _THEME_RULES 对齐。
+_TEMPLATE_THEME_LABEL = {
+    "ai-image": ("image-tool", "图像处理/生成"),
+    "avatar-viral": ("avatar", "AI 头像/写真"),
+    "sticker-viral": ("sticker", "表情包/贴纸"),
+    "pet-talk-viral": ("pet-talk", "宠物说话/配音"),
+    "blessing-video-viral": ("blessing-video", "祝福视频/贺卡"),
+    "funny-video-viral": ("funny-video", "搞笑短视频"),
+    "ai-chat": ("chat-tool", "聊天/助手"),
+    "ai-tool": ("general-tool", "通用 AI 工具"),
+}
 
 
 def classify(app: dict, viral: dict | None = None) -> dict:
     """归类题材并选择模板类型。返回 template-selection.json 内容。
 
-    采用「命中数最多者胜」的打分匹配，而非「第一个命中即胜」：题材描述常常
-    同时命中多条规则（如搞笑视频也含 meme），按命中关键词数量择优更稳健，
-    数量相同则按 _THEME_RULES 顺序作为优先级 tiebreaker。
+    选择优先级（不允许拍脑袋）：
+      1. 上游已给 selected_template 且在白名单 -> 直接尊重（FeatureOpportunity 核心）
+      2. 否则按 feature_name/description/features 关键词命中数打分（命中最多者胜）
+      3. 都不命中 -> 落 ai-tool（不失败）
+    上游给了但模板不存在 -> 仍落 ai-tool，并在 rationale 标注（codegen 层会硬校验报错）。
     """
+    upstream = (app.get("selected_template") or "").strip()
+    viral_tier = (viral or {}).get("tier", "unknown")
+    priority = "high" if viral_tier == "high" else ("medium" if viral_tier == "medium" else "normal")
+
+    if upstream and upstream in _KNOWN_TEMPLATES:
+        theme, theme_label = _TEMPLATE_THEME_LABEL.get(upstream, ("general-tool", "通用 AI 工具"))
+        return {
+            "app_name": app.get("name", ""),
+            "app_name_cn": app.get("name_cn", ""),
+            "theme": theme,
+            "theme_label": theme_label,
+            "selected_template": upstream,
+            "matched_keywords": [],
+            "viral_tier": viral_tier,
+            "priority": priority,
+            "selection_source": "upstream",
+            "rationale": f"尊重上游指定模板 {upstream}（题材「{theme_label}」）；传播力 {viral_tier}，排期 {priority}。",
+            "data_source": "demo_rule_based",
+        }
+
+    upstream_invalid = bool(upstream) and upstream not in _KNOWN_TEMPLATES
+
     text = _text(app)
 
     theme, template, theme_label = _DEFAULT
@@ -60,9 +107,9 @@ def classify(app: dict, viral: dict | None = None) -> dict:
             theme_label = label
             matched_keywords = hits
 
-    viral_tier = (viral or {}).get("tier", "unknown")
-    # 传播力高的题材建议优先排期
-    priority = "high" if viral_tier == "high" else ("medium" if viral_tier == "medium" else "normal")
+    rationale = f"题材归类为「{theme_label}」，选用模板 {template}；传播力 {viral_tier}，排期优先级 {priority}。"
+    if upstream_invalid:
+        rationale = f"上游指定模板 {upstream!r} 不在支持列表，已按关键词回退。" + rationale
 
     return {
         "app_name": app.get("name", ""),
@@ -73,6 +120,8 @@ def classify(app: dict, viral: dict | None = None) -> dict:
         "matched_keywords": matched_keywords,
         "viral_tier": viral_tier,
         "priority": priority,
-        "rationale": f"题材归类为「{theme_label}」，选用模板 {template}；传播力 {viral_tier}，排期优先级 {priority}。",
+        "selection_source": "classifier",
+        "upstream_invalid_template": upstream if upstream_invalid else None,
+        "rationale": rationale,
         "data_source": "demo_rule_based",
     }

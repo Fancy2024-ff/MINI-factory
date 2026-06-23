@@ -196,6 +196,38 @@ def generate_miniapp(app: dict, prd_json: dict, output_dir: Path, template: str 
     _write(docs_dir / "publish-guide.md", _publish_guide(app))
 
     gen_source["generated_files_count"] = len([f for f in miniapp_dir.rglob("*") if f.is_file()])
+
+    # --- codegen-report 信息（生成模块自我说明，由 runner 写盘为 codegen-report.json）---
+    # 区别于 qa-report.json：这里只说明「生成过程做了什么」，不做质量判定。
+    registered_pages = [pg.get("path") for pg in pages_config.get("pages", []) if pg.get("path")]
+    requested_template = template
+    template_exists = (overlay_applied == requested_template) or requested_template in ("base", "ai-tool")
+    warnings: list[str] = []
+    errors: list[str] = []
+    if gen_source["fallback_used"]:
+        warnings.append(f"请求模板 {requested_template!r} 不存在，已回退 base 骨架")
+    gen_source["codegen_report"] = {
+        "input_type": app.get("input_type", "app_candidate"),
+        "feature_key": app.get("feature_key", ""),
+        "parent_app_name": app.get("parent_app_name", ""),
+        "feature_name_cn": app.get("feature_name_cn", ""),
+        "app_name_cn": app_name,
+        "requested_template": requested_template,
+        "selected_template": overlay_applied,
+        "template_exists": template_exists,
+        "preview_type": blueprint.get("preview_type", ""),
+        "generated_files_count": gen_source["generated_files_count"],
+        "pages": registered_pages,
+        "token_injection": {
+            "app_name": bool(app_name),
+            "feature_name": bool(app.get("feature_name_cn")),
+            "template": True,
+            "preview_type": bool(blueprint.get("preview_type")),
+        },
+        "build_script_exists": "build:mp-weixin" in (pkg.get("scripts") or {}),
+        "warnings": warnings,
+        "errors": errors,
+    }
     return miniapp_dir, gen_source
 
 

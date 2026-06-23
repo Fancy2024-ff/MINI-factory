@@ -32,12 +32,18 @@ def platform_auth_status(plat: str) -> tuple[bool, list[str]]:
 
 
 def build_submission_readiness(best_app: dict, opportunity: dict, qa: dict,
-                               output_dir: Path, mode: str, job_id: str = "") -> dict:
+                               output_dir: Path, mode: str, job_id: str = "",
+                               growth_qa: dict | None = None,
+                               compliance_qa: dict | None = None,
+                               generator_qa: dict | None = None) -> dict:
     """Honest answer to: can we submit for review TODAY?
 
     ready_to_submit is True only when there are zero blocking issues — which
     means: QA/build passed, dist exists, platform auth (AppID) configured,
     screenshots prepared, and real-device testing done.
+
+    除 EngineeringQA(qa) 外，也纳入 GrowthQA / ComplianceQA / GeneratorQA：
+    工程/合规/生成不达标为 blocking；增长策略不达标为 warning（不阻塞上架本身）。
     """
     qa_passed = bool(qa.get("passed"))
     dist_exists = bool(qa.get("checks", {}).get("dist_exists"))
@@ -101,6 +107,11 @@ def build_submission_readiness(best_app: dict, opportunity: dict, qa: dict,
         blocking_issues.append("构建产物 dist/build/mp-weixin 缺失")
     if not any_configured:
         blocking_issues.append("尚未配置任何平台授权（缺 AppID/密钥）")
+    # 合规 / 生成质量未通过 = 阻塞（虚假承诺、缺法务文档、模板结构缺陷不应上架）
+    if compliance_qa is not None and not compliance_qa.get("passed", True):
+        blocking_issues.append("合规 QA 未通过（隐私/协议/能力边界等），不能提交审核")
+    if generator_qa is not None and not generator_qa.get("passed", True):
+        blocking_issues.append("生成器 QA 未通过（模板配置/签名页/产物契约缺陷）")
     # These are always required for a real submission and never auto-produced:
     blocking_issues.append("缺少真机测试截图，需人工准备")
     blocking_issues.append("未在目标平台真机测试")
@@ -109,6 +120,12 @@ def build_submission_readiness(best_app: dict, opportunity: dict, qa: dict,
         "生成代码为 MVP 模板，建议人工 review 业务逻辑",
         "AI 处理结果为占位，需接入真实后端 API",
     ]
+    # 增长策略不达标 = warning（影响传播效果，但不阻塞上架本身）
+    if growth_qa is not None and not growth_qa.get("passed", True):
+        warning_issues.append("增长 QA 未通过（分享/解锁/渠道/指标等增长要素不完整）")
+    # 合规 QA 的 warnings（敏感词等）透传为 warning
+    for w in (compliance_qa or {}).get("warnings", []) or []:
+        warning_issues.append(w)
 
     human_actions = [
         "在对应平台后台创建小程序并获取 AppID",

@@ -194,6 +194,9 @@ def _normalize_app(app: dict) -> dict:
     app["rating"] = app.get("rating", 0) or 0
     app["review_count"] = app.get("review_count", 0) or 0
     app["monetization"] = app.get("monetization") or "unknown"
+    # 输入契约：标注来源类型 + 透传上游已选模板（与 FeatureOpportunity 统一字段）。
+    app["input_type"] = app.get("input_type") or "app_candidate"
+    app["selected_template"] = (app.get("selected_template") or "").strip()
     return app
 
 
@@ -215,7 +218,21 @@ def load_market_input(mode: str = "demo") -> list[dict]:
     apps = json.loads(apps_file.read_text(encoding="utf-8-sig"))
     if not isinstance(apps, list) or not apps:
         raise ValueError(f"{apps_file} 必须是非空的 JSON 数组")
-    return [_normalize_app(a) for a in apps]
+    return [_normalize_input(a) for a in apps]
+
+
+def _normalize_input(raw: dict) -> dict:
+    """归一化一条输入：FeatureOpportunity 走 feature 契约，否则按 AppCandidate。
+
+    两类输入归一化后字段统一（含 input_type / selected_template），下游无需再判断形态。
+    """
+    from core.generator.feature_input import (
+        is_feature_opportunity,
+        normalize_feature_opportunity,
+    )
+    if is_feature_opportunity(raw):
+        return normalize_feature_opportunity(raw)
+    return _normalize_app(raw)
 
 
 # 候选决策权重：Viral Score 是候选选择的核心因子（占 40%），不是事后标签。
@@ -469,10 +486,17 @@ def _run_pipeline_steps(mode: str, job_id: str, output_dir: Path) -> dict:
     gen_dir.mkdir(exist_ok=True)
     miniapp_dir, gen_source = generate_miniapp(best_app, prd_json, gen_dir, template=selection["selected_template"])
     _write(output_dir / "generator-source.json", json.dumps(gen_source, ensure_ascii=False, indent=2))
+    # codegen-report.json：生成模块自我说明（区别于 qa-report.json 的质量判定）。
+    codegen_report = dict(gen_source.get("codegen_report") or {})
+    codegen_report["job_id"] = job_id
+    codegen_report["created_at"] = datetime.now().isoformat()
+    _write(output_dir / artifact_names.CODEGEN_REPORT_JSON,
+           json.dumps(codegen_report, ensure_ascii=False, indent=2))
     file_count = gen_source["generated_files_count"]
     p(f"  项目路径: {miniapp_dir}")
     p(f"  生成文件: {file_count} 个")
     p(f"  模板来源: {gen_source['source']} ({gen_source['template']})")
+    p(f"  输入类型: {codegen_report.get('input_type', 'app_candidate')}")
     step_end(artifact="generated/miniapp/")
     step_done(f"data/outputs/{job_id}/generated/miniapp/", time.time() - t0)
 
@@ -574,7 +598,10 @@ def _run_pipeline_steps(mode: str, job_id: str, output_dir: Path) -> dict:
     step_header(13, "提交就绪评估 + 产物清单", "Readiness")
     step_start("readiness", "提交就绪评估", "Readiness")
     t0 = time.time()
-    readiness = build_submission_readiness(best_app, opportunity, qa, output_dir, mode, job_id=job_id)
+    readiness = build_submission_readiness(
+        best_app, opportunity, qa, output_dir, mode, job_id=job_id,
+        growth_qa=growth_qa, compliance_qa=compliance_qa, generator_qa=generator_qa,
+    )
     _write(output_dir / "submission-readiness-report.json", json.dumps(readiness, ensure_ascii=False, indent=2))
     manifest = build_artifact_manifest(output_dir, qa, readiness, job_id=job_id)
     _write(output_dir / "artifact-manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))

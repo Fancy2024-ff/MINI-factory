@@ -34,6 +34,27 @@ _THEME_PLAYBOOK = {
         "loop": "台词可定制带来反复创作，单只宠物产出多条；分享朋友圈解锁高清",
         "metric": "成片分享率、单宠物生成条数、朋友圈带来的新用户数",
     },
+    "image-tool": {
+        "angle": "修图前后对比是强视觉钩子，「同一张图差距」天然引发围观",
+        "cold_start": "在摄影/修图/电商主图社群投放前后对比图，引导上传自己的图试一张",
+        "channels": ["微信社群", "小红书修图教程", "抖音前后对比", "电商卖家群"],
+        "loop": "每日免费额度 + 分享去水印/高清导出；邀请解锁更多修图风格",
+        "metric": "出图率、前后对比分享率、去水印转化、邀请解锁数/人",
+    },
+    "funny-video": {
+        "angle": "搞笑脚本/分镜是可复用拍摄模板，接龙挑战天然带动多人参与",
+        "cold_start": "在沙雕/搞笑/短视频创作社群投放热门主题脚本，发起接龙挑战",
+        "channels": ["抖音/快手挑战", "微信群接龙", "B 站二创", "微博热梗"],
+        "loop": "分享发起挑战解锁更多分镜模板；热门脚本复用激发 UGC 二次创作",
+        "metric": "挑战发起数、脚本复用率、单主题衍生视频数、接龙参与人数",
+    },
+    "blessing-video": {
+        "angle": "节日祝福是强社交转发场景，带收件人姓名的个性化贺卡转发率高",
+        "cold_start": "卡节日节点，在家庭群/同事群投放可定制姓名的祝福贺卡样例",
+        "channels": ["微信家庭群/同事群", "朋友圈节日刷屏", "公众号节日推送"],
+        "loop": "收件人个性化 + 群发裂变；转发解锁更多节日模板包",
+        "metric": "节日期间生成量、贺卡转发率、群发触达人数、模板包解锁数",
+    },
 }
 _DEFAULT_PLAYBOOK = {
     "angle": "靠工具价值与可晒结果驱动口碑传播",
@@ -45,14 +66,23 @@ _DEFAULT_PLAYBOOK = {
 
 
 def _playbook(selection: dict) -> dict:
-    """按题材取差异化打法；theme 直接命中，否则按 selected_template 前缀兜底。"""
+    """按题材取差异化打法；theme 直接命中，否则按 selected_template 映射兜底。"""
     theme = (selection.get("theme") or "").strip()
     if theme in _THEME_PLAYBOOK:
         return _THEME_PLAYBOOK[theme]
+    # selected_template -> playbook key 兜底映射（theme 缺失/不一致时）
     template = (selection.get("selected_template") or "")
-    for key in _THEME_PLAYBOOK:
-        if template.startswith(key):
-            return _THEME_PLAYBOOK[key]
+    template_to_key = {
+        "ai-image": "image-tool",
+        "avatar-viral": "avatar",
+        "sticker-viral": "sticker",
+        "pet-talk-viral": "pet-talk",
+        "funny-video-viral": "funny-video",
+        "blessing-video-viral": "blessing-video",
+    }
+    key = template_to_key.get(template)
+    if key and key in _THEME_PLAYBOOK:
+        return _THEME_PLAYBOOK[key]
     return _DEFAULT_PLAYBOOK
 
 

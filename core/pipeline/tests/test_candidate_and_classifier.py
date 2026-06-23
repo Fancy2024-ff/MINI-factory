@@ -94,3 +94,35 @@ def test_avatar_maps_to_avatar_viral():
                "上传自拍 AI 生成多风格头像写真，支持换脸",
                ["AI 写真", "换脸", "portrait"])
     assert _classify_template(app) == "avatar-viral"
+
+
+# ----- 尊重上游 selected_template（FeatureOpportunity 核心） -----
+
+def test_classifier_respects_upstream_selected_template():
+    """上游给了有效模板 → 直接尊重，不按关键词重判。"""
+    # 文本看起来像头像，但上游明确指定 ai-image → 必须用 ai-image
+    app = _app("AI Avatar-ish", "看起来像头像", "Photo & Video",
+               "头像 写真 portrait avatar", ["头像", "portrait"])
+    app["selected_template"] = "ai-image"
+    sel = classify(app, compute_viral_score(app))
+    assert sel["selected_template"] == "ai-image"
+    assert sel["selection_source"] == "upstream"
+
+
+def test_classifier_invalid_upstream_falls_back_not_crash():
+    """上游给了不存在的模板 → 回退关键词，不失败，并标注。"""
+    app = _app("Sticker Maker", "表情包制作", "Entertainment",
+               "一键生成表情包 sticker meme", ["表情包", "sticker"])
+    app["selected_template"] = "nonexistent-template"
+    sel = classify(app, compute_viral_score(app))
+    assert sel["selected_template"] == "sticker-viral"  # 回退到关键词命中
+    assert sel["selection_source"] == "classifier"
+    assert sel["upstream_invalid_template"] == "nonexistent-template"
+
+
+def test_classifier_no_match_falls_to_ai_tool():
+    """无关键词命中、无上游 → 落 ai-tool，不失败。"""
+    app = _app("Mystery", "神秘工具", "Utilities", "一个工具", ["功能"])
+    sel = classify(app, compute_viral_score(app))
+    assert sel["selected_template"] == "ai-tool"
+

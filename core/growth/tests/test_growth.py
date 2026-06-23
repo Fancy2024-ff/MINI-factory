@@ -54,3 +54,24 @@ def test_growth_plan_unknown_theme_falls_back():
     md = build_growth_plan(_APP, _VIRAL, {"theme": "mystery", "theme_label": "未知", "selected_template": "ai-tool"})
     for kw in ["增长重心", "渠道", "裂变", "指标"]:
         assert kw in md
+
+
+def test_growth_plan_covers_image_funny_blessing():
+    """ai-image / funny-video / blessing-video 也要有差异化打法（不落默认）。"""
+    image = build_growth_plan(_APP, _VIRAL, {"theme": "image-tool", "theme_label": "图像", "selected_template": "ai-image"})
+    funny = build_growth_plan(_APP, _VIRAL, {"theme": "funny-video", "theme_label": "搞笑", "selected_template": "funny-video-viral"})
+    blessing = build_growth_plan(_APP, _VIRAL, {"theme": "blessing-video", "theme_label": "祝福", "selected_template": "blessing-video-viral"})
+
+    assert "前后对比" in image
+    assert ("接龙" in funny or "挑战" in funny)
+    assert ("节日" in blessing or "贺卡" in blessing)
+    # 题材专属指标互不相同
+    assert "去水印转化" in image
+    assert "挑战发起数" in funny
+    assert "贺卡转发率" in blessing
+
+
+def test_growth_plan_playbook_via_selected_template_only():
+    """theme 缺失但有 selected_template 时，也能命中差异化打法。"""
+    md = build_growth_plan(_APP, _VIRAL, {"theme": "", "theme_label": "", "selected_template": "ai-image"})
+    assert "前后对比" in md

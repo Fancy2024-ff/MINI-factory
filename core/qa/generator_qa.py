@@ -101,6 +101,16 @@ def _check_template_config(template: str, checks: dict, issues: list[str]) -> No
             ok = False
             issues.append(f"{template} blueprint 合成失败: {e}")
 
+    # 模板签名页：template.json.pages 里 base 没有的页（题材身份页）必须有真实 .vue。
+    # base 通用页 = index/form/result/profile；其余即签名页（gallery/pack/upload/clip/greeting…）。
+    _BASE_PAGES = {"index", "form", "result", "profile"}
+    signature_pages = [p for p in (cfg.get("pages") or []) if p not in _BASE_PAGES]
+    for page in signature_pages:
+        vue = TEMPLATES_DIR / template / "src" / "pages" / page / f"{page}.vue"
+        if not vue.exists():
+            ok = False
+            issues.append(f"{template} 签名页缺失: src/pages/{page}/{page}.vue（题材身份页必须存在）")
+
     checks[key] = ok
 
 
