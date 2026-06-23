@@ -1,10 +1,23 @@
-"""core.opportunity.candidate_pool — 候选 App 标准化 + 去重合并。
+"""core.opportunity.candidate_pool — 候选 App 标准化 + 去重合并（正式版）。
 
-把多平台/多地区/多类目抓到的原始 App 记录合并成统一候选池：
-- canonical_key 去重（App Store 优先 trackId/bundleId；Google Play 用 appId；
-  无稳定 ID 用 source + normalized_name + developer）。
-- 同一 App 多地区/多类目出现不删除，合并为热度信号（appear_count / regions /
-  categories / keywords / best_rank）。
+把多平台/多地区/多类目/多入口抓到的原始 App 记录合并成统一候选池。
+
+canonical_key（去重主键，最终版）：
+  - App Store：source + 稳定 ID（trackId/bundleId），即 `app_store:<id>`
+  - Google Play：source + appId/package name，即 `google_play:<package>`
+  - 无稳定 ID 才 fallback：`<source>:name:<normalized_name>:<developer>`
+  跨平台同一逻辑 App 用各自平台 ID，不强行合并（避免误并）。
+
+去重区分三种情况：
+  1. 同一 App 跨地区重复出现 → 合并，regions/per_region_ranks/region_entries 累积
+  2. 同一 App 在不同榜单/搜索入口重复出现 → 合并，entry_types/seen_in 累积
+  3. 真正不同 App 但名字相近 → 因 ID 不同而 canonical_key 不同，不误并
+
+合并后保留：appear_count / best_rank / regions / categories / entry_types /
+  keywords / per_region_ranks / region_entries（per-region details）/ seen_in。
+
+排序聚合信号（build_candidate_pool）：(appear_count, rating, downloads) 降序——
+  出现越广（多地区+多入口）、评分越高、量级越大者排前。
 """
 
 from __future__ import annotations
@@ -25,10 +38,10 @@ def normalize_name(name: str) -> str:
 
 
 def canonical_key(record: dict) -> str:
-    """计算候选的 canonical_key。
+    """计算候选的 canonical_key（最终版去重主键）。
 
-    record 至少含 source（app_store/google_play）+ app_id；
-    无稳定 ID 时用 source:name:developer 兜底。
+    App Store 用 `app_store:<trackId/bundleId>`；Google Play 用 `google_play:<package>`；
+    无稳定 ID 时 fallback `<source>:name:<normalized_name>:<developer>`。
     """
     source = (record.get("source") or "").strip()
     app_id = (record.get("app_id") or "").strip()
@@ -56,6 +69,13 @@ def _empty_candidate(key: str, record: dict) -> dict:
         "keywords": [],
         "best_rank": None,
         "appear_count": 0,
+        # --- provenance（可追溯各地区原始信息）---
+        # region_entries: 每条来源的细粒度记录（平台/地区/入口/类目/关键词/名次）
+        "region_entries": [],
+        # per_region_ranks: {region: 该地区见过的最佳名次}
+        "per_region_ranks": {},
+        # seen_in: {platform/region/entry_type 组合标识} 去重集合（列表形式持久化）
+        "seen_in": [],
         "downloads": record.get("downloads", 0) or 0,
         "rating": record.get("rating", 0) or 0.0,
         # rating_available 区分「真低分 0」与「数据源无评分」（榜单 RSS 无评分）。
@@ -103,6 +123,27 @@ def merge_record(pool: dict[str, dict], record: dict) -> dict:
     rank = record.get("rank")
     if isinstance(rank, int) and rank > 0:
         cand["best_rank"] = rank if cand["best_rank"] is None else min(cand["best_rank"], rank)
+
+    # --- provenance：保留各地区/入口的原始可追溯信息 ---
+    region = record.get("region") or ""
+    entry_type = record.get("entry_type") or ""
+    platform = source
+    cand["region_entries"].append({
+        "platform": platform,
+        "region": region,
+        "entry_type": entry_type,
+        "category": record.get("category") or "",
+        "keywords": list(record.get("keywords") or ([record["keyword"]] if record.get("keyword") else [])),
+        "rank": rank if isinstance(rank, int) and rank > 0 else None,
+        "rank_kind": record.get("rank_kind") or "",
+    })
+    # seen_in：平台/地区/入口 组合去重标识
+    combo = f"{platform}:{region}:{entry_type}"
+    _merge_unique(cand["seen_in"], combo)
+    # per_region_ranks：该地区见过的最佳名次
+    if region and isinstance(rank, int) and rank > 0:
+        prev = cand["per_region_ranks"].get(region)
+        cand["per_region_ranks"][region] = rank if prev is None else min(prev, rank)
 
     # 取信号最大值（多地区取最强热度）
     cand["downloads"] = max(cand["downloads"], record.get("downloads", 0) or 0)

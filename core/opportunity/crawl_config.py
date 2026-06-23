@@ -46,15 +46,19 @@ SEARCH = "search"
 ENTRY_TYPES = [TOP_FREE, TOP_GROSSING, SEARCH]
 
 # 各平台对 entry_type 的支持能力（v1）。unsupported 的入口显式跳过并记录，不静默。
-# App Store：Apple RSS 提供 top_free/top_grossing 榜单；search 走 iTunes Search。
-# Google Play：第三方库 v1 暂不稳定提供 top_grossing 榜单，标 unsupported。
+# App Store：Apple RSS 提供 top_free/top_grossing 榜单；search 走 iTunes Search（均 Apple 自身源）。
+# Google Play：自研 httpx+bs4 直爬 search 稳定；榜单页（top_free/top_grossing）动态渲染难稳定直爬，
+#   标 unsupported，不伪装完成（原因见 crawl-report）。
 PLATFORM_ENTRY_SUPPORT: dict[str, dict[str, str]] = {
     "app_store": {TOP_FREE: SUPPORTED, TOP_GROSSING: SUPPORTED, SEARCH: SUPPORTED},
-    "google_play": {TOP_FREE: SUPPORTED, TOP_GROSSING: UNSUPPORTED, SEARCH: SUPPORTED},
+    "google_play": {TOP_FREE: UNSUPPORTED, TOP_GROSSING: UNSUPPORTED, SEARCH: SUPPORTED},
 }
 
 GOOGLE_PLAY_TOP_GROSSING_REASON = (
-    "Google Play v1 third-party scraper 暂不稳定提供 top_grossing 榜单，跳过该入口"
+    "Google Play 榜单页动态渲染，自研直爬无稳定榜单结构，top_grossing 标 unsupported"
+)
+GOOGLE_PLAY_TOP_FREE_REASON = (
+    "Google Play 榜单页动态渲染，自研直爬无稳定榜单结构，top_free 标 unsupported；search 入口可用"
 )
 
 # --- 类目 / 关键词 --------------------------------------------------------
@@ -127,6 +131,8 @@ def entry_type_status(platform: str, entry_type: str) -> str:
 def entry_skip_reason(platform: str, entry_type: str) -> str:
     if platform == "google_play" and entry_type == TOP_GROSSING:
         return GOOGLE_PLAY_TOP_GROSSING_REASON
+    if platform == "google_play" and entry_type == TOP_FREE:
+        return GOOGLE_PLAY_TOP_FREE_REASON
     return f"{platform} 暂不支持入口 {entry_type}，跳过"
 
 

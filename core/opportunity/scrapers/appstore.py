@@ -1,18 +1,17 @@
 """
-App Store data scraper（机会发现：App Store 数据源）。
+App Store data scraper（机会发现：仅使用 Apple 自身公开源）。
 
 入口（entry_type）：
-- search：iTunes Search API（关键词搜索，非榜单；best_rank 是搜索结果位置）。
-- top_free / top_grossing：Apple RSS 榜单（真实热门排名；best_rank 是榜单名次）。
+- search：iTunes Search API（Apple 公开，关键词搜索，非榜单；best_rank 是搜索结果位置）。
+- top_free / top_grossing：Apple RSS 榜单（Apple 公开，真实热门排名；best_rank 是榜单名次）。
 
-关键词来自 crawl_config（单一事实源），scraper 不再自己决定搜什么。
-所有正式请求经 fetch_policy（统一 UA / timeout / pace / retry）。
-Qimai API 在配置 key 时作为中国区增强源。
+数据源边界：只走 Apple 自身公开源（iTunes Search API + Apple RSS）。
+不使用任何第三方榜单/评论数据源（已移除七麦 Qimai）。
+关键词来自 crawl_config（单一事实源）。所有请求经 fetch_policy（统一 UA / timeout / pace / retry）。
 """
 
 from __future__ import annotations
 
-from core.runtime.config import QIMAI_API_KEY
 from core.opportunity import crawl_config as cfg
 from core.opportunity import fetch_policy
 from core.shared.models import AppInfo, AppSource
@@ -35,18 +34,13 @@ def fetch_ai_apps_appstore(
     entry_type: str = cfg.SEARCH,
     keywords: list[str] | None = None,
 ) -> list[AppInfo]:
-    """抓取 App Store 数据。
+    """抓取 App Store 数据（仅 Apple 自身源）。
 
     entry_type=search → iTunes Search（关键词）；top_free/top_grossing → Apple RSS 榜单（按 genre）。
     keywords 为空时从 crawl_config 取该 category 的关键词（单一事实源）。
     """
     if entry_type in (cfg.TOP_FREE, cfg.TOP_GROSSING):
         return _fetch_via_rss(entry_type, limit, country, category)
-
-    if QIMAI_API_KEY:
-        qimai_results = _fetch_via_qimai(category, limit, country)
-        if qimai_results:
-            return qimai_results
 
     terms = keywords or cfg.keywords_for_category(category)
     return _fetch_via_itunes(terms, limit, country)
@@ -169,34 +163,3 @@ def _extract_features(description: str) -> list[str]:
             if len(features) >= 5:
                 break
     return features
-
-
-def _fetch_via_qimai(category: str, limit: int, country: str) -> list[AppInfo]:
-    """Qimai (七麦) API（配置 key 时的中国区增强源）。"""
-    try:
-        data = fetch_policy.get_json(
-            "https://api.qimai.cn/rank/indexPlus/brand_id/1",
-            params={"genre": _category_to_genre_id(category), "country": country,
-                    "device": "iphone", "page": 1, "limit": limit},
-        )
-        apps = []
-        for item in data.get("appData", []):
-            info = item.get("appInfo", {})
-            apps.append(AppInfo(
-                name=info.get("appName", ""),
-                app_id=info.get("appId", ""),
-                source=AppSource.APP_STORE,
-                category=category,
-                description=info.get("description", ""),
-                downloads=info.get("downloads", 0),
-                rating=float(info.get("score", 0) or 0),
-            ))
-        return apps
-    except Exception as e:  # noqa: BLE001
-        print(f"[Qimai] API fetch failed: {e}")
-        return []
-
-
-def _category_to_genre_id(category: str) -> str:
-    return {"ai": "6013", "photo": "6008", "education": "6017",
-            "utilities": "6002", "entertainment": "6016"}.get(category, "6013")

@@ -44,6 +44,19 @@ def get_json(url: str, params: dict | None = None) -> Any:
     return resp.json()
 
 
+def get_text(url: str, params: dict | None = None) -> str:
+    """统一 httpx GET（带 UA + timeout），返回响应文本（HTML 直爬用）。
+
+    带浏览器风格 Accept-Language，便于 Google Play 等页面按地区返回内容。
+    """
+    headers = {**default_headers(), "Accept": "text/html,application/xhtml+xml",
+               "Accept-Language": "en-US,en;q=0.9"}
+    resp = httpx.get(url, params=params, headers=headers, timeout=request_timeout(),
+                     follow_redirects=True)
+    resp.raise_for_status()
+    return resp.text
+
+
 def with_retry(fn: Callable[[], Any], *, on_error: Callable[[str], None] | None = None) -> Any:
     """指数退避重试包装。全部失败抛最后一个异常（调用方决定降级）。
 

@@ -1,36 +1,44 @@
 """
-Google Play data scraper（机会发现：Google Play 数据源）。
+Google Play data scraper（机会发现：仅使用 Google Play 自身公开页面，直爬实现）。
+
+数据源边界：只走 Google Play 自身公开可访问页面（store.google.com / play.google.com），
+本项目自己用 httpx + BeautifulSoup 直爬，**不依赖 google-play-scraper 第三方库**，
+**不使用 SensorTower 等第三方榜单源**。
 
 入口（entry_type）：
-- search：google-play-scraper search（关键词；best_rank = 搜索结果位置）。
-- top_free：google-play-scraper collection 榜单（若库支持；best_rank = 榜单名次）。
-- top_grossing：v1 暂不稳定支持，由 crawl_config 标 unsupported，crawl_runner 显式跳过。
+- search：Google Play 搜索结果页（关键词；best_rank = 搜索结果位置）。country/hl 真实生效。
+- top_free：Google Play 排行榜页（榜单名次）。直爬可稳定取到时启用。
+- top_grossing：当前直爬不稳定，明确 unsupported（见 GP_TOP_GROSSING_REASON），不伪装完成。
 
-country 真实生效：search / collection / SensorTower 都使用传入 country，不写死 US。
-关键词来自 crawl_config（单一事实源）。
-
-限制说明：google-play-scraper 第三方库不暴露自定义 User-Agent（底层自带 UA），
-故本平台的 UA 统一策略仅作用于 SensorTower 等 httpx 直连请求；库请求依赖其默认行为。
+直爬说明：Google Play 前端是动态渲染，公开 HTML 里 App 信息以
+`/store/apps/details?id=<package>` 链接 + 邻近文本形式出现。我们解析锚点提取 package
+与展示名，按出现顺序作为 rank。解析失败/被限流时降级返回空（由 crawl_runner 记 failed）。
 """
 
 from __future__ import annotations
 
-from core.runtime.config import SENSORTOWER_API_KEY
+import re
+from urllib.parse import quote
+
+from bs4 import BeautifulSoup
+
 from core.opportunity import crawl_config as cfg
 from core.opportunity import fetch_policy
 from core.shared.models import AppInfo, AppSource
 
-try:
-    from google_play_scraper import search as gp_search
-    HAS_GP_SCRAPER = True
-except ImportError:
-    HAS_GP_SCRAPER = False
+GP_SEARCH_URL = "https://play.google.com/store/search"
+# top_grossing 直爬不稳定：Google Play 榜单页强依赖动态渲染，公开 HTML 难稳定取榜单名次。
+GP_TOP_GROSSING_REASON = "Google Play top_grossing 直爬不稳定，公开页面无稳定榜单结构，标记 unsupported"
 
-try:
-    from google_play_scraper import collection as gp_collection  # type: ignore
-    HAS_GP_COLLECTION = True
-except ImportError:
-    HAS_GP_COLLECTION = False
+_DETAILS_RE = re.compile(r"/store/apps/details\?id=([a-zA-Z0-9._]+)")
+
+
+def _lang_for_country(country: str) -> str:
+    """地区 → 界面语言（hl），影响返回内容地域性。"""
+    return {
+        "us": "en", "jp": "ja", "kr": "ko", "tw": "zh-TW", "hk": "zh-HK",
+        "sg": "en", "in": "en", "id": "id", "br": "pt",
+    }.get(country.lower(), "en")
 
 
 def fetch_ai_apps_googleplay(
@@ -40,146 +48,84 @@ def fetch_ai_apps_googleplay(
     entry_type: str = cfg.SEARCH,
     keywords: list[str] | None = None,
 ) -> list[AppInfo]:
-    """抓取 Google Play 数据。country 真实生效（不写死 US）。"""
-    if SENSORTOWER_API_KEY:
-        st_results = _fetch_via_sensortower(category, limit, country)
-        if st_results:
-            return st_results
+    """抓取 Google Play 数据（仅 Google Play 自身页面，httpx+bs4 直爬）。
 
-    if entry_type == cfg.TOP_FREE and HAS_GP_COLLECTION:
-        results = _fetch_top_free(category, limit, country)
-        if results:
-            return results
+    country / hl 真实生效，不写死 US。top_grossing 抛 unsupported（由上层标记跳过）。
+    """
+    if entry_type == cfg.TOP_GROSSING:
+        # 不伪装完成：直接抛，crawl_runner 据此标 failed/unsupported 并记原因。
+        raise GooglePlayUnsupportedEntry(GP_TOP_GROSSING_REASON)
 
-    if HAS_GP_SCRAPER:
-        terms = keywords or cfg.keywords_for_category(category)
-        return _fetch_via_scraper(terms, limit, country)
-
-    return []
+    terms = keywords or cfg.keywords_for_category(category)
+    return _fetch_via_search(terms, limit, country)
 
 
-def _lang_for_country(country: str) -> str:
-    """地区 → 语言（粗映射，影响 Google Play 返回内容地域性）。"""
-    return {
-        "us": "en", "jp": "ja", "kr": "ko", "tw": "zh-TW", "hk": "zh-HK",
-        "sg": "en", "in": "en", "id": "id", "br": "pt",
-    }.get(country.lower(), "en")
+class GooglePlayUnsupportedEntry(Exception):
+    """Google Play 不支持的入口（如 top_grossing 直爬不稳定）。"""
 
 
-def _fetch_via_scraper(search_terms: list[str], limit: int, country: str) -> list[AppInfo]:
-    """google-play-scraper search。country/lang 真实传入，每关键词请求间 pace。"""
+def _fetch_via_search(search_terms: list[str], limit: int, country: str) -> list[AppInfo]:
+    """直爬 Google Play 搜索结果页。每个关键词请求之间 pace（单请求级限速）。"""
     if not search_terms:
         return []
-    lang = _lang_for_country(country)
-    seen_ids: set[str] = set()
+    hl = _lang_for_country(country)
+    gl = country.lower()
+    seen: set[str] = set()
     apps: list[AppInfo] = []
-    per_term_limit = max(10, limit // len(search_terms))
+    per_term = max(5, limit // len(search_terms))
 
     for idx, term in enumerate(search_terms):
         if len(apps) >= limit:
             break
         if idx > 0:
             fetch_policy.pace()
+        url = f"{GP_SEARCH_URL}?q={quote(term)}&c=apps&hl={hl}&gl={gl}"
         try:
-            results = gp_search(term, lang=lang, country=country.lower(), n_hits=per_term_limit)
+            html = fetch_policy.with_retry(lambda: fetch_policy.get_text(url))
         except Exception as e:  # noqa: BLE001
-            print(f"[GooglePlay] Search failed for '{term}' ({country}): {e}")
+            print(f"[GooglePlay] search failed for '{term}' ({country}): {type(e).__name__}")
             continue
-        for item in results:
-            app_id = item.get("appId", "")
-            if not app_id or app_id in seen_ids:
+        for app in _parse_search_html(html, per_term):
+            pkg = app.app_id
+            if not pkg or pkg in seen:
                 continue
-            seen_ids.add(app_id)
-            apps.append(_to_appinfo(item, default_category="ai"))
-    apps.sort(key=lambda a: a.downloads, reverse=True)
+            seen.add(pkg)
+            apps.append(app)
     return apps[:limit]
 
 
-def _fetch_top_free(category: str, limit: int, country: str) -> list[AppInfo]:
-    """google-play-scraper collection 榜单（top_free）。库不支持时返回空，由上层降级。"""
-    try:
-        results = gp_collection(
-            collection="TOP_FREE",
-            category=_map_category(category),
-            country=country.lower(),
-            lang=_lang_for_country(country),
-            n_hits=limit,
-        )
-    except Exception as e:  # noqa: BLE001
-        print(f"[GooglePlay] TOP_FREE collection failed ({country}): {e}")
-        return []
-    apps = []
-    for item in results:
-        app_id = item.get("appId", "")
-        if app_id:
-            apps.append(_to_appinfo(item, default_category=category))
-    return apps[:limit]
-
-
-def _to_appinfo(item: dict, default_category: str) -> AppInfo:
-    return AppInfo(
-        name=item.get("title", ""),
-        app_id=item.get("appId", ""),
-        source=AppSource.GOOGLE_PLAY,
-        category=item.get("genre", default_category),
-        description=(item.get("description", "") or "")[:500],
-        downloads=_parse_installs(item.get("installs", "0")),
-        rating=float(item.get("score", 0) or 0),
-        developer=item.get("developer", "") or "",
-        features=_extract_features(item.get("description", "") or ""),
-    )
-
-
-def _parse_installs(installs_str) -> int:
-    if isinstance(installs_str, int):
-        return installs_str
-    try:
-        return int(str(installs_str).replace(",", "").replace("+", "").strip())
-    except (ValueError, TypeError):
-        return 0
-
-
-def _get_search_terms(category: str) -> list[str]:
-    """[兼容 fallback] 主路径用 crawl_config.keywords_for_category。"""
-    return cfg.keywords_for_category(category)
-
-
-def _extract_features(description: str) -> list[str]:
-    features = []
-    for line in description.split("\n"):
-        line = line.strip()
-        if line.startswith(("•", "-", "✓", "✔", "★", "·", "►")) and len(line) > 5:
-            features.append(line.lstrip("•-✓✔★·► "))
-            if len(features) >= 5:
-                break
-    return features
-
-
-def _fetch_via_sensortower(category: str, limit: int, country: str) -> list[AppInfo]:
-    """SensorTower API。country 真实传入（大写）。"""
-    try:
-        data = fetch_policy.get_json(
-            "https://api.sensortower.com/v1/android/rankings/get_top_apps",
-            params={"auth_token": SENSORTOWER_API_KEY, "category": _map_category(category),
-                    "country": country.upper(), "limit": limit},
-        )
-        apps = []
-        for item in data:
-            apps.append(AppInfo(
-                name=item.get("name", ""),
-                app_id=item.get("app_id", ""),
-                source=AppSource.GOOGLE_PLAY,
-                category=category,
-                description=item.get("description", ""),
-                downloads=item.get("downloads_estimate", 0),
-                rating=float(item.get("rating", 0) or 0),
-            ))
-        return apps
-    except Exception as e:  # noqa: BLE001
-        print(f"[SensorTower] API fetch failed ({country}): {e}")
-        return []
-
-
-def _map_category(category: str) -> str:
-    return {"ai": "PRODUCTIVITY", "photo": "PHOTOGRAPHY", "education": "EDUCATION",
-            "utilities": "TOOLS", "entertainment": "ENTERTAINMENT"}.get(category, "PRODUCTIVITY")
+def _parse_search_html(html: str, limit: int) -> list[AppInfo]:
+    """从搜索页 HTML 解析 App：details 链接拿 package，锚点文本/aria-label 拿展示名。"""
+    soup = BeautifulSoup(html or "", "html.parser")
+    out: list[AppInfo] = []
+    seen: set[str] = set()
+    for a in soup.find_all("a", href=True):
+        m = _DETAILS_RE.search(a["href"])
+        if not m:
+            continue
+        pkg = m.group(1)
+        if pkg in seen:
+            continue
+        # 展示名：锚点内文本，或子节点 title/aria-label
+        name = (a.get("aria-label") or a.get_text(" ", strip=True) or "").strip()
+        if not name:
+            node = a.find(attrs={"title": True})
+            name = (node.get("title") if node else "") or ""
+        name = name.strip()
+        if not name or len(name) > 80:
+            # 跳过空名/过长聚合文本（多为非应用卡片）
+            continue
+        seen.add(pkg)
+        out.append(AppInfo(
+            name=name,
+            app_id=pkg,
+            source=AppSource.GOOGLE_PLAY,
+            category="",
+            description="",
+            downloads=0,
+            rating=0.0,
+            developer="",
+        ))
+        if len(out) >= limit:
+            break
+    return out

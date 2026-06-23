@@ -213,7 +213,6 @@ npm test -- --run
 
 ## TODO
 
-- [ ] 接入七麦 / SensorTower API 获取真实排行榜数据
 - [ ] 接入 Claude API 替换本地评分规则
 - [ ] LLM 驱动的代码增强（更智能的页面逻辑）
 - [ ] 审核结果回填 + 自动复盘迭代

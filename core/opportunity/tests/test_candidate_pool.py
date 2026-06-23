@@ -85,3 +85,38 @@ def test_same_app_keeps_multiple_entry_types_across_regions():
     assert set(cand["entry_types"]) == {"top_free", "search", "top_grossing"}
     assert cand["appear_count"] == 3
     assert set(cand["regions"]) == {"US", "JP", "KR"}
+
+
+# --- P0-3: per-region provenance（各地区原始信息可追溯）---------------------
+
+def test_provenance_region_entries_preserved():
+    pool: dict = {}
+    merge_record(pool, _rec(region="CN", entry_type="top_free", category="photo",
+                            keywords=["AI 修图"], rank=2))
+    merge_record(pool, _rec(region="US", entry_type="search", category="photo",
+                            keywords=["AI photo editor"], rank=7))
+    cand = pool["app_store:123"]
+    assert len(cand["region_entries"]) == 2
+    cn = next(e for e in cand["region_entries"] if e["region"] == "CN")
+    assert cn["entry_type"] == "top_free" and cn["rank"] == 2 and "AI 修图" in cn["keywords"]
+    us = next(e for e in cand["region_entries"] if e["region"] == "US")
+    assert us["rank"] == 7
+
+
+def test_provenance_per_region_ranks_takes_best():
+    pool: dict = {}
+    merge_record(pool, _rec(region="CN", entry_type="top_free", rank=9))
+    merge_record(pool, _rec(region="CN", entry_type="search", rank=3))
+    merge_record(pool, _rec(region="US", entry_type="top_free", rank=5))
+    cand = pool["app_store:123"]
+    assert cand["per_region_ranks"]["CN"] == 3   # 取更优名次
+    assert cand["per_region_ranks"]["US"] == 5
+
+
+def test_provenance_seen_in_combos():
+    pool: dict = {}
+    merge_record(pool, _rec(region="CN", entry_type="top_free"))
+    merge_record(pool, _rec(region="US", entry_type="search"))
+    cand = pool["app_store:123"]
+    assert "app_store:CN:top_free" in cand["seen_in"]
+    assert "app_store:US:search" in cand["seen_in"]

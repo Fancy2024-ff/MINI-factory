@@ -24,9 +24,8 @@ ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "claude-sonnet-4-6")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
 
-# Data sources
-QIMAI_API_KEY = os.getenv("QIMAI_API_KEY", "")  # 七麦 API
-SENSORTOWER_API_KEY = os.getenv("SENSORTOWER_API_KEY", "")
+# Data sources：仅使用 App Store / Google Play 自身公开源，不接第三方榜单数据源
+# （已移除 QIMAI / SENSORTOWER）。抓取实现见 core/opportunity/scrapers。
 
 # Image generation provider（图片生成中转站；真实 key 只存 env，绝不入代码/产物/前端）。
 # 仅后端 core.integrations.image_generation 使用；小程序前端只经 apps/api 调用，

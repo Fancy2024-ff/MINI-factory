@@ -98,6 +98,16 @@ def _print_summary(report: dict) -> None:
     print("-" * 56)
     print(f"  tasks: success={s.get('success')} failed={s.get('failed')} "
           f"skipped={s.get('skipped')} cached={s.get('cached')}")
+    # unsupported（地区/入口）清楚提示：列出被跳过的任务及原因
+    skipped_tasks = [t for t in report.get("tasks", []) if t.get("status") == "skipped"]
+    if skipped_tasks:
+        print(f"  unsupported / skipped ({len(skipped_tasks)}):")
+        seen_reasons = set()
+        for t in skipped_tasks:
+            key = f"{t.get('platform')}/{t.get('entry_type')}: {t.get('reason', '')[:48]}"
+            if key not in seen_reasons:
+                seen_reasons.add(key)
+                print(f"    - {key}")
     print(f"  candidates       = {c.get('candidates')}")
     print(f"  features         = {c.get('features_total')}")
     print(f"  recommended      = {c.get('features_recommended')}")
