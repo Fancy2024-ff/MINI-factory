@@ -3,8 +3,38 @@
   "name_cn": "宠物说话",
   "name_en": "Pet Talk",
   "category": "viral",
-  "description": "上传宠物照片，配一句台词，生成会说话的宠物视频，分享朋友圈解锁高清。",
+  "description": "上传宠物照片，配一句台词，生成会说话的宠物预览（封面/海报），分享朋友圈解锁高清。",
   "preview_type": "petVideo",
+  "template_status": "core_runnable",
+  "status_label": "核心可跑通",
+  "generation_backend": "template_api",
+  "real_generation": true,
+  "fallback_mode": false,
+  "result_identity": "会说话的宠物预览（宠物 + 台词气泡的视频封面 / 海报）",
+  "boundary_note": "当前核心链路跑通，产出宠物说话预览 / 封面 / 海报；真实动态视频与配音为后续能力增强边界，不在当前产出范围。",
+  "qa_expectation": "必须为 core_runnable + template_api + real_generation=true + fallback_mode=false；不得被归为 honest_preview，但产出文案不得宣称已生成完整动态视频。",
+  "frontend_badge": "核心可跑通 · 真实生成（预览/封面）",
+  "growth_loop": {
+    "has_share_cta": true,
+    "share_cta_label": "分享宠物预览",
+    "share_title": "我家宠物开口说话了",
+    "share_copy": "上传宠物照和台词生成宠物说话预览，分享后解锁高清封面/导出",
+    "has_unlock": true,
+    "unlock_type": "timeline_share_unlock",
+    "unlock_hint": "分享后解锁高清宠物说话预览和去水印导出",
+    "has_watermark": true,
+    "watermark_label": "MiniForge 宠物预览水印",
+    "remove_watermark_supported": true,
+    "remove_watermark_condition": "分享到朋友圈后解锁去水印高清宠物预览/封面",
+    "brand_exposure": true,
+    "brand_label": "MiniForge 出品 · 宠物预览附小程序码",
+    "download_supported": true,
+    "export_supported": true,
+    "export_label": "导出宠物预览",
+    "capability_mode": "real",
+    "capability_note": "当前核心链路产出宠物说话预览/封面，动态视频和配音是后续增强；分享解锁去水印高清预览。",
+    "result_layer_logic": "结果页展示宠物说话预览/封面 + 含水印，分享 CTA 引导发朋友圈，解锁后去水印并开放高清封面导出（动态视频为后续边界）。"
+  },
   "input_fields": [
     {
       "id": "pet_photo",
@@ -46,7 +76,7 @@
   "supported_platforms": ["wechat"],
   "mock_examples": [
     {
-      "title": "会说话的宠物视频",
+      "title": "会说话的宠物预览",
       "preview_type": "petVideo",
       "preview_data": {
         "line": "主人，该喂饭啦！",
@@ -54,8 +84,8 @@
         "poster": "pet-video-poster-placeholder"
       },
       "share_title": "我家宠物开口说话了！",
-      "share_copy": "上传宠物照 + 一句台词，生成会说话的宠物视频",
-      "unlock_hint": "分享到朋友圈解锁高清视频 + 去水印"
+      "share_copy": "上传宠物照 + 一句台词，生成会说话的宠物预览",
+      "unlock_hint": "分享到朋友圈解锁高清 + 去水印"
     }
   ]
 }

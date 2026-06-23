@@ -97,6 +97,30 @@ const blueprintSummary = computed(() => {
   return ''
 })
 
+// 模板能力真实状态（来自 generator-source.json，P0-1 收口口径）。
+const templateStatusSummary = computed(() => {
+  const gs: any = props.job?.artifacts?.['generator-source.json']
+  if (!gs?.template_status) return ''
+  return gs.template_status === 'core_runnable' ? '核心可跑通' : '诚实预览'
+})
+
+const generationBackendSummary = computed(() => {
+  const gs: any = props.job?.artifacts?.['generator-source.json']
+  return gs?.generation_backend || ''
+})
+
+const realGenerationSummary = computed(() => {
+  const gs: any = props.job?.artifacts?.['generator-source.json']
+  if (!gs || gs.template_status === undefined) return ''
+  if (gs.real_generation) return '真实生成'
+  return gs.fallback_mode ? 'honest fallback / preview' : '本地预览'
+})
+
+const boundaryNoteSummary = computed(() => {
+  const gs: any = props.job?.artifacts?.['generator-source.json']
+  return gs?.boundary_note || ''
+})
+
 // 生成器 QA 摘要（来自 generator-qa-report.json，pipeline 接入时才有）
 const generatorQaSummary = computed(() => {
   const gq: any = props.job?.artifacts?.['generator-qa-report.json']
@@ -178,6 +202,18 @@ const statusSummary = computed(() => {
         <span class="status-label">预览类型</span>
         <span class="status-value mono">{{ previewTypeSummary }}</span>
       </div>
+      <div class="status-item" v-if="templateStatusSummary">
+        <span class="status-label">模板状态</span>
+        <span class="status-value">{{ templateStatusSummary }}</span>
+      </div>
+      <div class="status-item" v-if="generationBackendSummary">
+        <span class="status-label">生成后端</span>
+        <span class="status-value mono">{{ generationBackendSummary }}</span>
+      </div>
+      <div class="status-item" v-if="realGenerationSummary">
+        <span class="status-label">生成方式</span>
+        <span class="status-value">{{ realGenerationSummary }}</span>
+      </div>
       <div class="status-item" v-if="blueprintSummary">
         <span class="status-label">蓝图</span>
         <span class="status-value">{{ blueprintSummary }}</span>
@@ -210,6 +246,7 @@ const statusSummary = computed(() => {
 
     <!-- Summary sentence -->
     <div class="summary-sentence" v-if="statusSummary !== '等待启动任务'">{{ statusSummary }}</div>
+    <div class="boundary-note" v-if="boundaryNoteSummary">能力边界：{{ boundaryNoteSummary }}</div>
 
     <!-- Main content area -->
     <div class="console-body">
@@ -245,6 +282,14 @@ const statusSummary = computed(() => {
   padding: 8px 16px;
   background: var(--color-blue-subtle);
   border-radius: var(--radius-sm);
+  margin-bottom: 16px;
+}
+
+.boundary-note {
+  font-size: 12px;
+  color: var(--color-text-3);
+  padding: 6px 16px;
+  margin-top: -8px;
   margin-bottom: 16px;
 }
 

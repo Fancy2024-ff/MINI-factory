@@ -138,6 +138,7 @@ async function buildBlueprint(
     const resultContract = (cfg.result_fields || [])
       .map((f: any) => f.id)
       .filter(Boolean);
+    const realGeneration = !!cfg.real_generation;
     return {
       template_id: cfg.id,
       app_name: appName || cfg.name_cn,
@@ -151,6 +152,16 @@ async function buildBlueprint(
       compliance_notes: cfg.compliance_notes || [],
       mock_examples: cfg.mock_examples,
       is_fallback: false,
+      // 模板能力字段（与 Python _capability_from_config 对齐）。
+      template_status: cfg.template_status || (realGeneration ? "core_runnable" : "honest_preview"),
+      status_label: cfg.status_label || (realGeneration ? "核心可跑通" : "诚实预览"),
+      generation_backend: cfg.generation_backend || (realGeneration ? "template_api" : "honest_fallback"),
+      real_generation: realGeneration,
+      fallback_mode: cfg.fallback_mode !== undefined ? !!cfg.fallback_mode : !realGeneration,
+      result_identity: cfg.result_identity || cfg.description || "",
+      boundary_note: cfg.boundary_note || "",
+      qa_expectation: cfg.qa_expectation || "",
+      frontend_badge: cfg.frontend_badge || cfg.status_label || (realGeneration ? "核心可跑通" : "诚实预览"),
     };
   }
   if (VIRAL_TEMPLATES.has(template)) {
@@ -180,6 +191,16 @@ async function buildBlueprint(
       unlock_hint: "分享解锁高清无水印结果 + 解锁更多模板",
     }],
     is_fallback: true,
+    // 兜底模板默认通用预览，不冒充真实生成（与 Python _fallback_blueprint 对齐）。
+    template_status: "honest_preview",
+    status_label: "通用预览",
+    generation_backend: "honest_fallback",
+    real_generation: false,
+    fallback_mode: true,
+    result_identity: "通用文本结果",
+    boundary_note: "通用兜底模板：当前仅提供通用文本预览，非题材化真实生成。",
+    qa_expectation: "兜底模板，无强制题材分类要求。",
+    frontend_badge: "通用预览",
   };
 }
 

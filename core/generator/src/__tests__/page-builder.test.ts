@@ -199,11 +199,31 @@ describe("generateProject (ai-tool)", () => {
     expect(bp.template_id).toBe("avatar-viral");
     expect(bp.preview_type).toBe("avatar");
     expect(bp.is_fallback).toBe(false);
+    // 模板能力字段（P0-1 收口）：avatar-viral 是核心可跑通
+    expect(bp.template_status).toBe("core_runnable");
+    expect(bp.generation_backend).toBe("template_api");
+    expect(bp.real_generation).toBe(true);
+    expect(bp.fallback_mode).toBe(false);
     // generation.ts 支持 blueprint 驱动
     const svc = await fs.readFile(path.join(p, "src/services/generation.ts"), "utf-8");
     expect(svc).toContain("loadBlueprint");
     expect(svc).toContain("generateFromBlueprint");
   });
+
+  // P0-1: 诚实边界型模板（funny/blessing）blueprint 状态正确。
+  const HONEST = ["funny-video-viral", "blessing-video-viral"];
+  for (const template of HONEST) {
+    it(`marks ${template} as honest_preview (not fallback config)`, async () => {
+      const res = await generateProject(prd, template);
+      const bp = await fs.readJSON(path.join(res.project_path, "src/config/blueprint.json"));
+      expect(bp.template_status).toBe("honest_preview");
+      expect(bp.generation_backend).toBe("honest_fallback");
+      expect(bp.real_generation).toBe(false);
+      expect(bp.fallback_mode).toBe(true);
+      // 有自己的 template.json，不是兜底配置
+      expect(bp.is_fallback).toBe(false);
+    });
+  }
 
   // v2: 兜底模板（ai-tool）无 template.json -> fallback blueprint（preview_type text）。
   it("falls back to a text blueprint for templates without template.json", async () => {

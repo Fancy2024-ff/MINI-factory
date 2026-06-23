@@ -6,7 +6,19 @@
   <view class="container">
     <view v-if="result" class="result-card">
       <text class="result-title">{{ result.title }}</text>
-      <text class="result-template">模板：{{ result.template }}</text>
+      <text class="result-template">模板：{{ result.template }} · {{ result.previewType }}</text>
+
+      <!-- 模板能力真实状态：核心可跑通 / honest fallback preview，口径与 blueprint/QA 一致 -->
+      <view class="status-bar" :class="isCore ? 'status-bar--core' : 'status-bar--preview'">
+        <text class="status-badge">{{ statusLabel }}</text>
+        <text class="status-line">真实生成：{{ result.realGeneration ? '是' : '否' }}</text>
+        <text class="status-line" v-if="result.fallbackMode">模式：{{ result.apiFailed ? 'API 失败降级预览' : 'honest fallback / preview mode' }}</text>
+      </view>
+      <text v-if="!isCore" class="boundary-note">
+        当前为 honest fallback / preview mode，真实视频生成是后续能力边界
+      </text>
+      <text v-if="result.boundaryNote" class="boundary-note boundary-note--muted">{{ result.boundaryNote }}</text>
+
 
       <!-- 按 previewType 渲染不同结果形态 -->
       <view class="preview">
@@ -24,7 +36,7 @@
         </block>
         <block v-else-if="result.previewType === 'petVideo'">
           <text class="preview-note">台词：{{ result.previewData.line }}</text>
-          <text class="preview-note">时长：{{ result.previewData.duration }}s（视频占位）</text>
+          <text class="preview-note">宠物说话预览 / 封面已生成（动态视频为后续增强）</text>
         </block>
         <block v-else-if="result.previewType === 'funnyStoryboard'">
           <text class="preview-note">主题：{{ result.previewData.topic }}</text>
@@ -92,11 +104,25 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { loadResult, unlockResult, type GeneratedResult } from '../../services/generation'
 
 const result = ref<GeneratedResult | null>(null)
+
+// 核心可跑通模板（真实生成且非降级）；否则视为 honest fallback / preview。
+const isCore = computed(() =>
+  result.value?.templateStatus === 'core_runnable' &&
+  result.value?.realGeneration === true &&
+  !result.value?.fallbackMode,
+)
+
+const statusLabel = computed(() => {
+  if (!result.value) return ''
+  if (result.value.apiFailed) return 'API 失败 · 临时预览'
+  if (isCore.value) return '核心可跑通 · 真实生成'
+  return 'honest fallback · preview mode'
+})
 
 onLoad((options: any) => {
   const id = options?.id ? decodeURIComponent(options.id) : ''
@@ -128,7 +154,14 @@ function goHome() {
 .container { padding: 32rpx; min-height: 100vh; background: #f5f5f7; }
 .result-card { background: #fff; border-radius: 16rpx; padding: 32rpx; }
 .result-title { font-size: 34rpx; font-weight: 600; color: #1d1d1f; display: block; }
-.result-template { font-size: 22rpx; color: #8e8e93; margin: 8rpx 0 24rpx; display: block; }
+.result-template { font-size: 22rpx; color: #8e8e93; margin: 8rpx 0 16rpx; display: block; }
+.status-bar { border-radius: 12rpx; padding: 16rpx 20rpx; margin-bottom: 16rpx; display: flex; flex-direction: column; gap: 6rpx; }
+.status-bar--core { background: #e8f8ee; border: 1rpx solid #a6e3bf; }
+.status-bar--preview { background: #fff4e6; border: 1rpx solid #ffd591; }
+.status-badge { font-size: 26rpx; font-weight: 600; color: #1d1d1f; }
+.status-line { font-size: 22rpx; color: #555; }
+.boundary-note { font-size: 22rpx; color: #ad6800; display: block; margin-bottom: 12rpx; line-height: 1.5; }
+.boundary-note--muted { color: #8e8e93; }
 .preview { background: #f5f5f7; border-radius: 12rpx; padding: 24rpx; min-height: 160rpx; margin-bottom: 24rpx; position: relative; }
 .preview-note { font-size: 28rpx; color: #333; display: block; margin-bottom: 12rpx; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 12rpx; }

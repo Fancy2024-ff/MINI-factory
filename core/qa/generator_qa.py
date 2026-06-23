@@ -11,8 +11,12 @@
      - preview_type 被 generation.ts/result.vue 支持
      - input_fields / share_hooks / unlock_hooks / mock_examples 非空
      - blueprint_builder 能为 5 个模板成功合成 blueprint
+     - 模板能力分类正确（core_runnable vs honest_preview）：
+       avatar/sticker/pet-talk = core_runnable + template_api + real_generation + 非 fallback；
+       funny/blessing = honest_preview + honest_fallback + 非 real + fallback_mode；
+       funny/blessing 文案不得宣称「视频已生成」；pet-talk 不得被归为 honest_preview。
   2. 生成产物级（传入 miniapp_dir 时）：
-     - 含 src/config/blueprint.json（或等价配置）
+     - 含 src/config/blueprint.json（或等价配置），且含模板能力字段
      - 无 __APP_ token 残留
      - generation.ts 支持 blueprint 驱动（loadBlueprint + generateFromBlueprint）
 
@@ -25,12 +29,34 @@ import json
 from pathlib import Path
 
 from core.generator.blueprint_builder import (
+    CAPABILITY_FIELDS,
     SUPPORTED_PREVIEW_TYPES,
     VIRAL_TEMPLATES,
     build_template_blueprint,
 )
 
 TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "generator" / "src" / "templates"
+
+# 5 套传播型模板的固定能力分类（P0-1 收口事实表，QA 据此校验，不允许漂移）。
+#   核心可跑通：真实链路跑通（template_api + real_generation）。
+#   诚实边界型：只产出预览（honest_fallback + fallback_mode），不伪装真实视频。
+EXPECTED_CLASSIFICATION = {
+    "avatar-viral": "core_runnable",
+    "sticker-viral": "core_runnable",
+    "pet-talk-viral": "core_runnable",
+    "funny-video-viral": "honest_preview",
+    "blessing-video-viral": "honest_preview",
+}
+
+# 诚实边界型模板产出/文案里禁止出现的误导措辞（伪装成完整视频能力）。
+_MISLEADING_VIDEO_FRAGMENTS = (
+    "视频已生成",
+    "完整视频已生成",
+    "完整视频生成成功",
+    "视频生成成功",
+    "已生成完整视频",
+)
+
 
 _FRONTEND_FORBIDDEN_FRAGMENTS = (
     "IMAGE_GENERATION_API_KEY",
@@ -111,7 +137,80 @@ def _check_template_config(template: str, checks: dict, issues: list[str]) -> No
             ok = False
             issues.append(f"{template} 签名页缺失: src/pages/{page}/{page}.vue（题材身份页必须存在）")
 
+    # 模板能力分类（P0-1 收口）：字段齐全 + 分类与 EXPECTED_CLASSIFICATION 一致。
+    if not _check_capability_classification(template, cfg, issues):
+        ok = False
+
     checks[key] = ok
+
+
+def _check_capability_classification(template: str, cfg: dict, issues: list[str]) -> bool:
+    """校验单个模板的能力字段齐全且分类正确。返回是否通过。
+
+    口径（固定，不允许漂移）：
+      - 5 个能力字段（template_status/generation_backend/real_generation/
+        fallback_mode/boundary_note）必须存在。
+      - 核心可跑通：core_runnable + template_api + real_generation=True + fallback_mode=False。
+      - 诚实边界型：honest_preview + honest_fallback + real_generation=False + fallback_mode=True，
+        且文案不得宣称「视频已生成」。
+      - pet-talk 必须是 core_runnable（不得被归为 honest_preview）。
+    """
+    ok = True
+    required = ("template_status", "generation_backend", "real_generation",
+                "fallback_mode", "boundary_note")
+    missing = [k for k in required if k not in cfg]
+    if missing:
+        issues.append(f"{template}/template.json 缺少能力字段: {', '.join(missing)}")
+        return False
+
+    expected_status = EXPECTED_CLASSIFICATION.get(template)
+    if expected_status and cfg.get("template_status") != expected_status:
+        ok = False
+        issues.append(
+            f"{template} template_status={cfg.get('template_status')!r}，应为 {expected_status!r}"
+        )
+
+    if expected_status == "core_runnable":
+        if cfg.get("generation_backend") != "template_api":
+            ok = False
+            issues.append(f"{template} 核心模板 generation_backend 应为 template_api")
+        if cfg.get("real_generation") is not True:
+            ok = False
+            issues.append(f"{template} 核心模板 real_generation 应为 true")
+        if cfg.get("fallback_mode") is not False:
+            ok = False
+            issues.append(f"{template} 核心模板 fallback_mode 应为 false")
+    elif expected_status == "honest_preview":
+        if cfg.get("generation_backend") != "honest_fallback":
+            ok = False
+            issues.append(f"{template} 边界模板 generation_backend 应为 honest_fallback")
+        if cfg.get("real_generation") is not False:
+            ok = False
+            issues.append(f"{template} 边界模板 real_generation 应为 false")
+        if cfg.get("fallback_mode") is not True:
+            ok = False
+            issues.append(f"{template} 边界模板 fallback_mode 应为 true")
+        # 诚实边界型不得用「视频已生成」类误导文案。只扫用户可见文案字段
+        # （description + mock_examples 的 title/share/ unlock），不扫 QA/边界说明本身。
+        for frag in _MISLEADING_VIDEO_FRAGMENTS:
+            if frag in _user_facing_copy(cfg):
+                ok = False
+                issues.append(f"{template} 出现误导文案「{frag}」（诚实边界型不得宣称视频已生成）")
+    return ok
+
+
+def _user_facing_copy(cfg: dict) -> str:
+    """汇总模板里会展示给用户的文案（不含 QA/边界等内部说明），用于误导文案扫描。"""
+    parts = [cfg.get("description", ""), cfg.get("name_cn", "")]
+    for ex in cfg.get("mock_examples", []) or []:
+        parts += [ex.get("title", ""), ex.get("share_title", ""),
+                  ex.get("share_copy", ""), ex.get("unlock_hint", "")]
+        pd = ex.get("preview_data") or {}
+        if isinstance(pd, dict):
+            parts += [str(v) for v in pd.values()]
+    return " ".join(p for p in parts if p)
+
+
 
 
 def _check_generated_project(miniapp_dir: Path, checks: dict, issues: list[str]) -> None:
@@ -120,16 +219,29 @@ def _check_generated_project(miniapp_dir: Path, checks: dict, issues: list[str])
 
     bp_path = src / "config" / "blueprint.json"
     bp_ok = bp_path.exists()
+    bp_data: dict = {}
     if bp_ok:
         try:
-            bp = json.loads(bp_path.read_text(encoding="utf-8-sig"))
-            bp_ok = bool(bp.get("template_id")) and bp.get("preview_type") in SUPPORTED_PREVIEW_TYPES
+            bp_data = json.loads(bp_path.read_text(encoding="utf-8-sig"))
+            bp_ok = bool(bp_data.get("template_id")) and bp_data.get("preview_type") in SUPPORTED_PREVIEW_TYPES
         except Exception as e:
             bp_ok = False
             issues.append(f"生成项目 blueprint.json 非法: {e}")
     checks["generated_blueprint_exists"] = bp_ok
     if not bp_path.exists():
         issues.append("生成项目缺少 src/config/blueprint.json")
+
+    # blueprint.json 必须含模板能力字段（template_status/generation_backend/
+    # real_generation/fallback_mode/boundary_note 等），供前端/QA 统一读取。
+    bp_cap_ok = True
+    if bp_path.exists() and bp_data:
+        bp_missing = [k for k in CAPABILITY_FIELDS if k not in bp_data]
+        if bp_missing:
+            bp_cap_ok = False
+            issues.append(f"生成项目 blueprint.json 缺少能力字段: {', '.join(bp_missing)}")
+    elif not bp_path.exists():
+        bp_cap_ok = False
+    checks["generated_blueprint_capability_fields"] = bp_cap_ok
 
     # 无 __APP_ token 残留
     no_residue = True

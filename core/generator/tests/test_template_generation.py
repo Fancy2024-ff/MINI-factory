@@ -88,14 +88,30 @@ def test_build_pet_talk_prompt_includes_line():
 
 
 def test_generate_template_pet_talk_marks_video_unsupported():
-    """诚实边界：pet-talk 当前不产出真实视频，返回须显式标注 video_supported=False。"""
+    """诚实边界：pet-talk 核心链路跑通，产出预览/封面（real_generation=True），
+    但 video_supported=False（非动态视频），标题不得宣称完整视频已生成。"""
     out = tg.generate_template("pet-talk-viral", {"prompt": "你好呀"}, generate=_fake_ok)
     assert out["ok"] is True
     assert out["template_id"] == "pet-talk-viral"
     assert out["preview_type"] == "petVideo"
-    assert out["video_supported"] is False  # 不虚假承诺视频
-    assert "预留" in out["result"]["title"]
+    assert out["video_supported"] is False  # 非动态视频
+    assert out["real_generation"] is True   # 核心链路真跑通
+    assert out["fallback_mode"] is False
+    # 文案：预览/封面已生成，但不得宣称完整视频已生成
+    assert "预览" in out["result"]["title"]
+    assert "完整视频" not in out["result"]["title"]
     assert out["result"]["prompt"] == "你好呀"
+
+
+def test_generate_template_core_returns_capability_markers():
+    """三个核心模板返回必须带 real_generation=True / fallback_mode=False / boundary_note。"""
+    for tpl, ptype in (("avatar-viral", "avatar"), ("sticker-viral", "stickerPack"),
+                       ("pet-talk-viral", "petVideo")):
+        out = tg.generate_template(tpl, {"prompt": "x"}, generate=_fake_ok)
+        assert out["preview_type"] == ptype
+        assert out["real_generation"] is True, tpl
+        assert out["fallback_mode"] is False, tpl
+        assert out["boundary_note"], f"{tpl} 缺 boundary_note"
 
 
 def test_generate_template_missing_prompt_raises():

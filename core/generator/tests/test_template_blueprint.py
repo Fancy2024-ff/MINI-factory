@@ -86,3 +86,41 @@ def test_invalid_json_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(bb, "TEMPLATES_DIR", tmp_path)
     with pytest.raises(BlueprintError):
         bb.load_template_config("avatar-viral")
+
+
+# --- 模板能力分类（P0-1 收口）---
+
+CAPABILITY_KEYS = (
+    "template_status", "generation_backend", "real_generation",
+    "fallback_mode", "boundary_note",
+)
+
+CORE_RUNNABLE = ("avatar-viral", "sticker-viral", "pet-talk-viral")
+HONEST_PREVIEW = ("funny-video-viral", "blessing-video-viral")
+
+
+@pytest.mark.parametrize("template", VIRAL)
+def test_blueprint_carries_capability_fields(template):
+    bp = build_template_blueprint(template, SAMPLE_APP, SAMPLE_PRD)
+    for k in CAPABILITY_KEYS:
+        assert k in bp, f"{template} blueprint 缺能力字段 {k}"
+
+
+@pytest.mark.parametrize("template", CORE_RUNNABLE)
+def test_core_runnable_classification(template):
+    bp = build_template_blueprint(template, SAMPLE_APP, SAMPLE_PRD)
+    assert bp["template_status"] == "core_runnable"
+    assert bp["generation_backend"] == "template_api"
+    assert bp["real_generation"] is True
+    assert bp["fallback_mode"] is False
+
+
+@pytest.mark.parametrize("template", HONEST_PREVIEW)
+def test_honest_preview_classification(template):
+    bp = build_template_blueprint(template, SAMPLE_APP, SAMPLE_PRD)
+    assert bp["template_status"] == "honest_preview"
+    assert bp["generation_backend"] == "honest_fallback"
+    assert bp["real_generation"] is False
+    assert bp["fallback_mode"] is True
+    # 边界型有自己的 template.json，blueprint_is_fallback 应为 False（不是兜底配置）
+    assert bp["is_fallback"] is False

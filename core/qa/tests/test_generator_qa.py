@@ -40,11 +40,21 @@ def _write_cfg(tmp_path: Path, template: str, cfg: dict):
 
 
 def _good_cfg(template="avatar-viral"):
+    # 默认按核心模板填能力字段；honest_preview 类用 _honest_cfg。
+    honest = template in ("funny-video-viral", "blessing-video-viral")
     return {
         "id": template,
         "name_cn": "测试",
         "category": "viral",
         "preview_type": "avatar",
+        "template_status": "honest_preview" if honest else "core_runnable",
+        "status_label": "诚实预览" if honest else "核心可跑通",
+        "generation_backend": "honest_fallback" if honest else "template_api",
+        "real_generation": not honest,
+        "fallback_mode": honest,
+        "boundary_note": "能力边界说明",
+        "qa_expectation": "QA 期望说明",
+        "frontend_badge": "标签",
         "input_fields": [{"id": "x", "label": "x", "type": "text", "required": False, "placeholder": "p"}],
         "share_hooks": ["a", "b"],
         "unlock_hooks": ["a", "b"],
@@ -108,15 +118,81 @@ def test_missing_share_unlock_mock_fails(tmp_path, monkeypatch):
     assert "mock_examples" in issues
 
 
+def test_missing_capability_fields_fails(tmp_path, monkeypatch):
+    """模板缺能力字段（template_status 等）必须失败。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        cfg = _good_cfg(t)
+        del cfg["template_status"]
+        del cfg["real_generation"]
+        _write_cfg(tmp_path, t, cfg)
+    result = run_generator_qa()
+    assert not result["passed"]
+    assert any("能力字段" in i for i in result["issues"])
+
+
+def test_pet_talk_misclassified_as_honest_preview_fails(tmp_path, monkeypatch):
+    """pet-talk 被错误归为 honest_preview 必须失败（它是核心可跑通）。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    # 把 pet-talk 错标成 honest_preview
+    bad = _good_cfg("pet-talk-viral")
+    bad["template_status"] = "honest_preview"
+    bad["generation_backend"] = "honest_fallback"
+    bad["real_generation"] = False
+    bad["fallback_mode"] = True
+    _write_cfg(tmp_path, "pet-talk-viral", bad)
+    result = run_generator_qa()
+    assert not result["passed"]
+    assert result["checks"]["template_config:pet-talk-viral"] is False
+    assert any("pet-talk-viral" in i and "core_runnable" in i for i in result["issues"])
+
+
+def test_core_template_marked_fallback_fails(tmp_path, monkeypatch):
+    """核心模板被标成 fallback（real_generation=false）必须失败。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    bad = _good_cfg("avatar-viral")
+    bad["real_generation"] = False
+    bad["fallback_mode"] = True
+    _write_cfg(tmp_path, "avatar-viral", bad)
+    result = run_generator_qa()
+    assert not result["passed"]
+    assert result["checks"]["template_config:avatar-viral"] is False
+
+
+def test_honest_preview_misleading_copy_fails(tmp_path, monkeypatch):
+    """诚实边界型模板出现「视频已生成」类误导文案必须失败。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    bad = _good_cfg("funny-video-viral")
+    bad["mock_examples"][0]["title"] = "完整视频已生成"
+    _write_cfg(tmp_path, "funny-video-viral", bad)
+    result = run_generator_qa()
+    assert not result["passed"]
+    assert any("误导文案" in i for i in result["issues"])
+
+
 def _make_generated_project(miniapp_dir: Path, *, with_blueprint=True,
                             blueprint_driven=True, token_residue=False):
     src = miniapp_dir / "src"
     (src / "config").mkdir(parents=True, exist_ok=True)
     (src / "services").mkdir(parents=True, exist_ok=True)
     if with_blueprint:
+        bp = {"template_id": "avatar-viral", "preview_type": "avatar",
+              "template_status": "core_runnable", "status_label": "核心可跑通",
+              "generation_backend": "template_api", "real_generation": True,
+              "fallback_mode": False, "result_identity": "头像",
+              "boundary_note": "边界", "qa_expectation": "qa", "frontend_badge": "badge"}
         (src / "config" / "blueprint.json").write_text(
-            json.dumps({"template_id": "avatar-viral", "preview_type": "avatar"}),
-            encoding="utf-8",
+            json.dumps(bp), encoding="utf-8",
         )
     svc = "export function mockGenerate(){}"
     if blueprint_driven:
@@ -131,10 +207,25 @@ def test_generated_project_passes(tmp_path):
     _make_generated_project(mini)
     result = run_generator_qa(miniapp_dir=mini)
     assert result["checks"]["generated_blueprint_exists"] is True
+    assert result["checks"]["generated_blueprint_capability_fields"] is True
     assert result["checks"]["generated_no_token_residue"] is True
     assert result["checks"]["generation_blueprint_driven"] is True
     assert result["checks"]["generation_api_mode_path"] is True
     assert result["checks"]["generated_no_provider_secret_residue"] is True
+
+
+def test_generated_blueprint_missing_capability_fields_fails(tmp_path):
+    """生成项目 blueprint.json 缺能力字段必须失败。"""
+    mini = tmp_path / "mini"
+    _make_generated_project(mini)
+    # 覆写成缺能力字段的 blueprint
+    (mini / "src" / "config" / "blueprint.json").write_text(
+        json.dumps({"template_id": "avatar-viral", "preview_type": "avatar"}),
+        encoding="utf-8",
+    )
+    result = run_generator_qa(miniapp_dir=mini)
+    assert result["checks"]["generated_blueprint_capability_fields"] is False
+    assert not result["passed"]
 
 
 def test_generated_missing_blueprint_fails(tmp_path):

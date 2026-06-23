@@ -1,19 +1,22 @@
-// 统一生成服务（blueprint 驱动，API 优先 + mock 兼容）。
+// 统一生成服务（blueprint 驱动，按模板能力状态执行）。
 //
 // 设计：
-// - blueprint.json（codegen 由 template.json 合成）是题材事实源：preview_type /
-//   mock_examples / share_hooks / unlock_hooks 都从蓝图读取，generation.ts 不再
-//   硬编码每个模板的分支。
+// - blueprint.json（codegen 由 template.json 合成）是题材+能力事实源：preview_type /
+//   template_status / generation_backend / real_generation / fallback_mode /
+//   boundary_note / mock_examples / share_hooks 都从蓝图读取。
 // - blueprint 缺失/损坏时回退到安全默认值（不崩、不阻断闭环）。
 // - 运行模式由 config/api.ts 控制：GENERATION_MODE='api' 且 API_BASE 合法时，
-//   **正式生成产物默认优先走真实后端**（/api/generation/template 或 /image）；
-//   GENERATION_MODE='mock'（或不支持真实生成的模板）才走本地 mock。
+//   核心模板默认优先走真实后端（/api/generation/template 或 /image）。
 // - 前端只知道 apps/api 地址，绝不接触中转站 URL/key。
 //
-// 真实链路覆盖（与后端 template_generation SUPPORTED_TEMPLATES 一致）：
-//   ai-image / avatar-viral / sticker-viral / pet-talk-viral（pet-talk 为静态封面预览，
-//   视频为流程预留）。funny-video-viral / blessing-video-viral 暂无真实视频生成，
-//   走「诚实预览型」mock，不伪装成已完成（previewData.honest_fallback=true）。
+// 模板能力两类（与后端 template_generation / template.json 口径一致）：
+//   A. 核心可跑通（core_runnable + template_api + real_generation=true）：
+//      ai-image / avatar-viral / sticker-viral / pet-talk-viral。走真实后端；
+//      真实调用失败时降级本地预览，但显式标记 apiFailed + fallbackMode，不伪装成功。
+//      （pet-talk 产出宠物说话预览/封面，动态视频为后续增强边界，非 fallback。）
+//   B. 诚实边界型（honest_preview + honest_fallback + real_generation=false）：
+//      funny-video-viral / blessing-video-viral。永远走 honest fallback / preview，
+//      只产出 storyboard/card 预览，绝不伪装成「视频已生成」。
 
 import { SELECTED_TEMPLATE, PREVIEW_TYPE } from '../config/template'
 // blueprint.json 由 codegen 在生成项目时写入（template.json -> blueprint）。
@@ -56,6 +59,15 @@ export interface Blueprint {
   compliance_notes: string[]
   mock_examples: MockExample[]
   is_fallback: boolean
+  // 模板能力真实状态（codegen 从 template.json 注入，前端/QA 口径一致）。
+  template_status?: 'core_runnable' | 'honest_preview'
+  status_label?: string
+  generation_backend?: 'template_api' | 'honest_fallback'
+  real_generation?: boolean
+  fallback_mode?: boolean
+  result_identity?: string
+  boundary_note?: string
+  frontend_badge?: string
 }
 
 export interface GeneratedResult {
@@ -69,6 +81,17 @@ export interface GeneratedResult {
   unlockHint: string
   watermarkEnabled: boolean
   createdAt: number
+  // 模板能力真实状态（与 blueprint / 后端返回口径一致，结果页据此展示真实/预览）。
+  templateStatus?: 'core_runnable' | 'honest_preview'
+  generationBackend?: 'template_api' | 'honest_fallback'
+  realGeneration?: boolean
+  fallbackMode?: boolean
+  boundaryNote?: string
+  qaStatus?: string
+  qaHint?: string
+  // API 失败降级标记：true 表示核心模板真实链路失败、临时回退本地预览，不伪装成功。
+  apiFailed?: boolean
+  fallbackReason?: string
   // 可选增强字段
   inputSummary?: string
   sourceBlueprint?: string
@@ -111,6 +134,14 @@ const FALLBACK_BLUEPRINT: Blueprint = {
     unlock_hint: '分享解锁高清无水印结果 + 解锁更多模板',
   }],
   is_fallback: true,
+  // 兜底蓝图默认按通用预览处理，不冒充真实生成。
+  template_status: 'honest_preview',
+  status_label: '通用预览',
+  generation_backend: 'honest_fallback',
+  real_generation: false,
+  fallback_mode: true,
+  boundary_note: '通用兜底模板：当前仅提供通用预览，非题材化真实生成。',
+  frontend_badge: '通用预览',
 }
 
 let _blueprintCache: Blueprint | null = null
@@ -169,6 +200,12 @@ function buildFromBlueprint(
     shareCopy,
     unlockHint,
     watermarkEnabled: true,
+    // 模板能力真实状态：从 blueprint 透传，前端据此展示真实/预览，不靠猜。
+    templateStatus: bp.template_status,
+    generationBackend: bp.generation_backend,
+    realGeneration: bp.real_generation,
+    fallbackMode: bp.fallback_mode,
+    boundaryNote: bp.boundary_note,
     inputSummary: text || (input.assetPlaceholder ? '已上传素材' : ''),
     sourceBlueprint: bp.template_id,
     nextActionHint: bp.unlock_hooks[0] || '分享解锁更多',
@@ -240,9 +277,41 @@ async function callRealApi(bp: Blueprint, input: GenerateInput): Promise<Generat
     shareCopy: example.share_copy || bp.share_hooks[1] || bp.share_hooks[0] || '',
     unlockHint: example.unlock_hint || bp.unlock_hooks[0] || '分享解锁高清无水印结果',
     watermarkEnabled: true,
+    // 核心模板真实链路成功：如实标记 real_generation / template_api。
+    templateStatus: bp.template_status || 'core_runnable',
+    generationBackend: bp.generation_backend || 'template_api',
+    realGeneration: true,
+    fallbackMode: false,
+    boundaryNote: bp.boundary_note,
     inputSummary: prompt,
     sourceBlueprint: tpl,
     nextActionHint: bp.unlock_hooks[0] || '分享解锁更多',
+  }
+}
+
+// 核心模板真实 API 失败时的降级预览：显式标记 apiFailed + fallbackMode，
+// 绝不静默伪装成真实生成成功（spec P0-1 收口要求）。
+function buildApiFailedFallback(
+  bp: Blueprint,
+  input: GenerateInput,
+  reason: string,
+): GeneratedResult {
+  const base = buildFromBlueprint(bp, input)
+  base.previewData = {
+    ...(base.previewData || {}),
+    api_failed: true,
+    fallback_note: '真实生成暂时不可用，已临时回退本地预览',
+  }
+  return {
+    id: genId(),
+    createdAt: Date.now(),
+    ...base,
+    // 真实链路失败：不冒充真实生成成功。
+    realGeneration: false,
+    fallbackMode: true,
+    apiFailed: true,
+    fallbackReason: reason,
+    qaHint: '真实生成失败，当前展示为本地预览（apiFailed）',
   }
 }
 
@@ -253,9 +322,20 @@ function buildHonestPreview(bp: Blueprint, input: GenerateInput): GeneratedResul
   base.previewData = {
     ...(base.previewData || {}),
     honest_fallback: true,
-    fallback_note: '当前为预览型结果，真实视频生成为流程预留',
+    fallback_note: bp.boundary_note || '当前为预览型结果，真实视频生成为后续能力边界',
   }
-  return { id: genId(), createdAt: Date.now(), ...base }
+  return {
+    id: genId(),
+    createdAt: Date.now(),
+    ...base,
+    // 诚实边界型：明确 honest_preview / honest_fallback，不伪装真实视频生成。
+    templateStatus: 'honest_preview',
+    generationBackend: 'honest_fallback',
+    realGeneration: false,
+    fallbackMode: true,
+    boundaryNote: bp.boundary_note || '真实视频生成是后续能力边界',
+    qaHint: 'honest fallback / preview mode',
+  }
 }
 
 // blueprint 驱动的生成入口。
@@ -272,25 +352,39 @@ export async function generateFromBlueprint(
   return result
 }
 
-// 正式生成入口。API 优先：mode=api 时支持真实生成的模板走后端；
-// 视频预览型模板走诚实 fallback；其余/未配置走本地 mock。
+// 正式生成入口。按模板能力状态执行：
+// - 诚实边界型（funny/blessing）：永远走 honest fallback / preview mode，绝不调真实接口；
+// - 核心模板（ai-image/avatar/sticker/pet-talk）：api 模式优先走后端真实链路，
+//   失败时降级为本地预览但显式标记 apiFailed + fallbackMode，不静默伪装成功；
+// - 其余 / 未配置：本地 mock。
 export async function mockGenerate(input: GenerateInput): Promise<GeneratedResult> {
   const bp = loadBlueprint()
-  // api 模式：支持真实生成的模板优先走后端真实链路。
-  // 真实调用抛错时直接抛给上层，由 form/result 转友好错误态，不静默吞掉。
-  if (GENERATION_MODE === 'api') {
-    const real = await callRealApi(bp, input)
-    if (real) {
-      saveResult(real)
-      return real
-    }
-  }
-  // 视频预览型模板（funny-video / blessing-video）：诚实预览，不伪装真实视频。
+
+  // 诚实边界型模板（funny-video / blessing-video）：无论何种模式都走诚实预览，
+  // 不调用真实接口，也不冒充真实视频生成。
   if (PREVIEW_ONLY_TEMPLATES.indexOf(bp.template_id) !== -1) {
     const preview = buildHonestPreview(bp, input)
     saveResult(preview)
     return preview
   }
+
+  // 核心模板 api 模式：优先走后端真实链路。真实调用失败时降级为本地预览，
+  // 但显式标记 apiFailed + fallbackMode + fallbackReason，不静默伪装真实成功。
+  if (GENERATION_MODE === 'api' && API_TEMPLATES.indexOf(bp.template_id) !== -1) {
+    try {
+      const real = await callRealApi(bp, input)
+      if (real) {
+        saveResult(real)
+        return real
+      }
+    } catch (e: any) {
+      const reason = (e && e.message) || '真实生成调用失败'
+      const degraded = buildApiFailedFallback(bp, input, reason)
+      saveResult(degraded)
+      return degraded
+    }
+  }
+
   // 本地 mock：模拟一点生成耗时
   await new Promise((r) => setTimeout(r, 600))
   return generateFromBlueprint(bp, input)

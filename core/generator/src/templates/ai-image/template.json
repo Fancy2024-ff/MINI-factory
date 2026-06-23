@@ -5,6 +5,15 @@
   "category": "ai-tool",
   "description": "输入描述或上传图片，生成/处理图片结果，分享解锁高清无水印版。",
   "preview_type": "image",
+  "template_status": "core_runnable",
+  "status_label": "核心可跑通",
+  "generation_backend": "template_api",
+  "real_generation": true,
+  "fallback_mode": false,
+  "result_identity": "AI 生成 / 处理后的图片作品",
+  "boundary_note": "当前走真实出图后端生成图片；不做完整视频剪辑 / 专业批量修图。",
+  "qa_expectation": "core_runnable + template_api + real_generation=true + fallback_mode=false。",
+  "frontend_badge": "核心可跑通 · 真实生成",
   "input_fields": [
     {
       "id": "prompt",

@@ -276,3 +276,69 @@ def test_api_config_non_https_base_falls_back_to_mock(sample_app, sample_prd, tm
     assert "export const GENERATION_MODE: 'mock' | 'api' = 'mock'" in txt
     assert "export const API_BASE = ''" in txt
     assert gen_source.get("generation_mode") == "mock"
+
+
+# --- 模板能力状态收口（P0-1）---
+
+CORE_RUNNABLE = ("avatar-viral", "sticker-viral", "pet-talk-viral")
+HONEST_PREVIEW = ("funny-video-viral", "blessing-video-viral")
+
+
+def _gen(template, sample_app, sample_prd, tmp_path):
+    miniapp_dir, gen_source = generate_miniapp(sample_app, sample_prd, tmp_path, template=template)
+    bp = json.loads((miniapp_dir / "src" / "config" / "blueprint.json").read_text(encoding="utf-8"))
+    return miniapp_dir, gen_source, bp
+
+
+@pytest.mark.parametrize("template", CORE_RUNNABLE)
+def test_core_template_blueprint_status(template, sample_app, sample_prd, tmp_path):
+    """核心模板生成后 blueprint.json 状态正确：core_runnable + template_api + real。"""
+    _, gen_source, bp = _gen(template, sample_app, sample_prd, tmp_path)
+    assert bp["template_status"] == "core_runnable"
+    assert bp["generation_backend"] == "template_api"
+    assert bp["real_generation"] is True
+    assert bp["fallback_mode"] is False
+    assert bp["boundary_note"]
+    # generator-source.json 记录真实状态
+    assert gen_source["template_status"] == "core_runnable"
+    assert gen_source["real_generation"] is True
+    assert gen_source["fallback_mode"] is False
+
+
+@pytest.mark.parametrize("template", HONEST_PREVIEW)
+def test_honest_preview_blueprint_status(template, sample_app, sample_prd, tmp_path):
+    """funny/blessing 生成后 blueprint.json 是 honest_preview + fallback_mode true，
+    但 blueprint_is_fallback false（它们有自己的 template.json，非兜底配置）。"""
+    _, gen_source, bp = _gen(template, sample_app, sample_prd, tmp_path)
+    assert bp["template_status"] == "honest_preview"
+    assert bp["generation_backend"] == "honest_fallback"
+    assert bp["real_generation"] is False
+    assert bp["fallback_mode"] is True
+    assert bp["is_fallback"] is False  # 关键区分：不是兜底配置
+    assert gen_source["blueprint_is_fallback"] is False
+    assert gen_source["fallback_mode"] is True
+    assert gen_source["template_status"] == "honest_preview"
+
+
+def test_generation_service_api_template_split(generated):
+    """generation.ts: API_TEMPLATES 含三个核心模板，PREVIEW_ONLY 含 funny/blessing。"""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "services" / "generation.ts").read_text(encoding="utf-8")
+    assert "const API_TEMPLATES = ['ai-image', 'avatar-viral', 'sticker-viral', 'pet-talk-viral']" in txt
+    assert "funny-video-viral" in txt and "blessing-video-viral" in txt
+    # 核心模板不在 PREVIEW_ONLY
+    assert "PREVIEW_ONLY_TEMPLATES = ['funny-video-viral', 'blessing-video-viral']" in txt
+    # API 失败显式降级标记，不静默伪装
+    assert "apiFailed" in txt
+    assert "fallbackReason" in txt
+
+
+def test_result_page_shows_template_status(generated):
+    """result.vue 展示模板真实状态（status / previewType / boundaryNote / 真实生成）。"""
+    miniapp_dir, _ = generated
+    result = (miniapp_dir / "src" / "pages" / "result" / "result.vue").read_text(encoding="utf-8")
+    assert "previewType" in result
+    assert "boundaryNote" in result
+    assert "真实生成" in result
+    assert "honest fallback" in result
+    assert "templateStatus" in result

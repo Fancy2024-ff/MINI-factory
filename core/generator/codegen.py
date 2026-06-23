@@ -41,6 +41,29 @@ TOKEN_GENERATION_MODE = "__GENERATION_MODE__"
 TEMPLATES_DIR = Path(__file__).resolve().parent / "src" / "templates"
 
 
+def _growth_loop_summary(blueprint: dict) -> dict:
+    """从 blueprint.growth_loop 抽取扁平摘要，供 generator-source / codegen_report / 前端消费。
+
+    前端 dashboard 在没有读入 blueprint.json 时，可直接从 generator-source.json 取这些
+    布尔/枚举字段判断「这套生成的小程序带不带传播闭环」，无需解析整段 growth_loop。
+    """
+    gl = blueprint.get("growth_loop") or {}
+    return {
+        "growth_loop_present": bool(gl),
+        "has_share_cta": bool(gl.get("has_share_cta")),
+        "share_cta_label": gl.get("share_cta_label", ""),
+        "has_unlock": bool(gl.get("has_unlock")),
+        "unlock_type": gl.get("unlock_type", ""),
+        "has_watermark": bool(gl.get("has_watermark")),
+        "remove_watermark_supported": bool(gl.get("remove_watermark_supported")),
+        "brand_exposure": bool(gl.get("brand_exposure")),
+        "download_supported": bool(gl.get("download_supported")),
+        "export_supported": bool(gl.get("export_supported")),
+        "capability_mode": gl.get("capability_mode", ""),
+    }
+
+
+
 def _resolve_generation_runtime() -> tuple[str, str]:
     """决定生成产物前端的 (generation_mode, api_base)。
 
@@ -114,6 +137,17 @@ def generate_miniapp(app: dict, prd_json: dict, output_dir: Path, template: str 
     preview_type = blueprint["preview_type"]
     gen_source["preview_type"] = preview_type
     gen_source["blueprint_is_fallback"] = blueprint["is_fallback"]
+    # 模板能力真实状态（事实源 template.json -> blueprint），写入 gen_source 供 runner 落盘。
+    # 注意区分：blueprint_is_fallback = blueprint 是否用兜底配置；
+    #          fallback_mode = 模板是否诚实兜底（无真实生成，如 funny/blessing）。
+    gen_source["template_status"] = blueprint.get("template_status", "")
+    gen_source["generation_backend"] = blueprint.get("generation_backend", "")
+    gen_source["real_generation"] = blueprint.get("real_generation", False)
+    gen_source["fallback_mode"] = blueprint.get("fallback_mode", False)
+    gen_source["boundary_note"] = blueprint.get("boundary_note", "")
+    # 传播闭环摘要（事实源 template.json.growth_loop -> blueprint），写入 gen_source。
+    gen_source["growth_loop"] = blueprint.get("growth_loop", {})
+    gen_source["growth_loop_summary"] = _growth_loop_summary(blueprint)
 
     # --- 2. token 注入 ---
     tokens = {
@@ -216,6 +250,15 @@ def generate_miniapp(app: dict, prd_json: dict, output_dir: Path, template: str 
         "selected_template": overlay_applied,
         "template_exists": template_exists,
         "preview_type": blueprint.get("preview_type", ""),
+        # 模板真实能力状态（与 blueprint.json / 前端 / QA 口径一致）。
+        "template_status": blueprint.get("template_status", ""),
+        "generation_backend": blueprint.get("generation_backend", ""),
+        "real_generation": blueprint.get("real_generation", False),
+        "fallback_mode": blueprint.get("fallback_mode", False),
+        "boundary_note": blueprint.get("boundary_note", ""),
+        "blueprint_is_fallback": blueprint.get("is_fallback", False),
+        # 传播闭环摘要（与 blueprint.json / 前端 / Growth QA 口径一致）。
+        **_growth_loop_summary(blueprint),
         "generated_files_count": gen_source["generated_files_count"],
         "pages": registered_pages,
         "token_injection": {

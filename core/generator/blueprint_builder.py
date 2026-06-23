@@ -45,6 +45,103 @@ SUPPORTED_PREVIEW_TYPES = {
     "image", "text",
 }
 
+# 模板能力分类合法值（事实源在 template.json，此处登记可选集）。
+TEMPLATE_STATUSES = {"core_runnable", "honest_preview"}
+GENERATION_BACKENDS = {"template_api", "honest_fallback"}
+
+# 模板能力字段（从 template.json 注入到 blueprint，供 codegen / 前端 / QA 统一读取）。
+# 注意：blueprint.fallback_mode 表示「该模板是否诚实兜底（无真实生成）」，
+# 与 blueprint.is_fallback（blueprint 是否用了兜底配置）是两件事，不要混淆。
+CAPABILITY_FIELDS = (
+    "template_status", "status_label", "generation_backend",
+    "real_generation", "fallback_mode", "result_identity",
+    "boundary_note", "qa_expectation", "frontend_badge",
+)
+
+
+def _capability_from_config(cfg: dict) -> dict:
+    """从 template.json 抽取模板能力字段；缺省给安全默认（按通用工具型兜底）。"""
+    real_generation = bool(cfg.get("real_generation", False))
+    return {
+        "template_status": cfg.get("template_status")
+        or ("core_runnable" if real_generation else "honest_preview"),
+        "status_label": cfg.get("status_label")
+        or ("核心可跑通" if real_generation else "诚实预览"),
+        "generation_backend": cfg.get("generation_backend")
+        or ("template_api" if real_generation else "honest_fallback"),
+        "real_generation": real_generation,
+        "fallback_mode": bool(cfg.get("fallback_mode", not real_generation)),
+        "result_identity": cfg.get("result_identity") or cfg.get("description", ""),
+        "boundary_note": cfg.get("boundary_note", ""),
+        "qa_expectation": cfg.get("qa_expectation", ""),
+        "frontend_badge": cfg.get("frontend_badge")
+        or cfg.get("status_label")
+        or ("核心可跑通" if real_generation else "诚实预览"),
+    }
+
+
+# --- 传播闭环（growth_loop）结构化事实源（P0-2）---
+# template.json.growth_loop 是「这套模板带不带传播机制」的单一事实源，
+# 比 share_hooks / unlock_hooks 更明确：分享 CTA / 解锁 / 水印 / 去水印 / 品牌露出 /
+# 下载导出 / 能力真实度都用结构化布尔+文案表达，供 codegen / 生成产物 / 前端 / QA 统一消费。
+# capability_mode 与能力字段对齐：real <-> real_generation=true；fallback_preview <-> 诚实预览。
+GROWTH_LOOP_REQUIRED_KEYS = (
+    "has_share_cta", "share_cta_label", "share_title", "share_copy",
+    "has_unlock", "unlock_type", "unlock_hint",
+    "has_watermark", "watermark_label", "remove_watermark_supported",
+    "brand_exposure", "brand_label",
+    "download_supported", "export_supported", "export_label",
+    "capability_mode", "capability_note",
+)
+GROWTH_LOOP_CAPABILITY_MODES = {"real", "fallback_preview"}
+
+
+def _generic_growth_loop(cfg: dict) -> dict:
+    """通用兜底 growth_loop（base/ai-* 等非 viral 模板）。
+
+    通用模板不能冒充 viral 模板：capability_mode 跟随 real_generation，
+    文案保持通用、不带题材化传播话术。
+    """
+    real_generation = bool(cfg.get("real_generation", False))
+    return {
+        "has_share_cta": True,
+        "share_cta_label": "分享结果",
+        "share_title": cfg.get("share_title") or "看看我用它生成的结果",
+        "share_copy": "一键生成，分享解锁完整高清结果",
+        "has_unlock": True,
+        "unlock_type": "share_to_unlock",
+        "unlock_hint": "分享解锁高清无水印结果",
+        "has_watermark": True,
+        "watermark_label": "MiniForge 水印",
+        "remove_watermark_supported": True,
+        "remove_watermark_condition": "分享后解锁去水印结果",
+        "brand_exposure": True,
+        "brand_label": "MiniForge 出品 · 结果附小程序码",
+        "download_supported": bool(real_generation),
+        "export_supported": bool(real_generation),
+        "export_label": "导出结果" if real_generation else "导出入口已预留",
+        "capability_mode": "real" if real_generation else "fallback_preview",
+        "capability_note": cfg.get("boundary_note")
+        or ("真实生成结果，分享解锁去水印。" if real_generation
+            else "通用预览结果，非题材化真实生成。"),
+        "result_layer_logic": "结果页展示生成结果 + 含水印预览，分享 CTA 引导传播，解锁后去水印。",
+    }
+
+
+def _growth_loop_from_config(template: str, cfg: dict) -> dict:
+    """取模板的 growth_loop 结构化事实源。
+
+    - 显式 growth_loop（viral 模板）：原样透传（已在 _validate_config 校验完整性）。
+    - 无显式 growth_loop（ai-image / 兜底）：按能力字段派生通用 growth_loop，
+      但不冒充 viral 模板（capability_mode 跟随真实能力、文案通用）。
+    """
+    gl = cfg.get("growth_loop")
+    if isinstance(gl, dict) and gl:
+        return gl
+    return _generic_growth_loop(cfg)
+
+
+
 # --- template.json schema（单一事实源，GeneratorQA 与 codegen 共用）---
 # top-level 必需键
 REQUIRED_CONFIG_FIELDS = (
@@ -104,6 +201,47 @@ def _validate_config(template: str, cfg: dict) -> None:
                 f"{template}/template.json input_field {f['id']} type={f['type']!r} "
                 f"不在允许集合 {sorted(ALLOWED_INPUT_TYPES)}"
             )
+    # viral 模板必须带结构化 growth_loop 事实源（P0-2，不允许只靠 share_hooks）。
+    if template in VIRAL_TEMPLATES:
+        _validate_growth_loop(template, cfg)
+
+
+def _validate_growth_loop(template: str, cfg: dict) -> None:
+    """校验 viral 模板的 growth_loop 结构化传播闭环事实源。
+
+    - 必须存在且为 dict；
+    - 必须含 GROWTH_LOOP_REQUIRED_KEYS 全部键；
+    - capability_mode 必须是 real / fallback_preview 之一；
+    - 与能力字段对齐：real_generation=true 的核心模板不得标 fallback_preview；
+      诚实预览型（funny/blessing）必须是 fallback_preview，不得冒充 real。
+    """
+    gl = cfg.get("growth_loop")
+    if not isinstance(gl, dict) or not gl:
+        raise BlueprintError(
+            f"传播型模板 {template}/template.json 缺少结构化 growth_loop 事实源（P0-2）"
+        )
+    miss = [k for k in GROWTH_LOOP_REQUIRED_KEYS if k not in gl]
+    if miss:
+        raise BlueprintError(
+            f"{template}/template.json growth_loop 缺少键: {', '.join(miss)}"
+        )
+    mode = gl.get("capability_mode")
+    if mode not in GROWTH_LOOP_CAPABILITY_MODES:
+        raise BlueprintError(
+            f"{template}/template.json growth_loop.capability_mode={mode!r} "
+            f"不在 {sorted(GROWTH_LOOP_CAPABILITY_MODES)}"
+        )
+    real_generation = bool(cfg.get("real_generation", False))
+    if real_generation and mode != "real":
+        raise BlueprintError(
+            f"{template}/template.json real_generation=true 但 growth_loop.capability_mode={mode!r}，"
+            f"核心可跑通模板必须为 real（口径冲突）"
+        )
+    if not real_generation and mode != "fallback_preview":
+        raise BlueprintError(
+            f"{template}/template.json real_generation=false 但 growth_loop.capability_mode={mode!r}，"
+            f"诚实预览型模板必须为 fallback_preview（不得冒充真实生成）"
+        )
 
 
 def _fallback_blueprint(template: str, app: dict, prd_json: dict) -> dict:
@@ -133,6 +271,38 @@ def _fallback_blueprint(template: str, app: dict, prd_json: dict) -> dict:
         }],
         "source_template_config": None,
         "is_fallback": True,
+        # 兜底模板（base/ai-*）默认通用文本预览：标为 honest_preview，不冒充真实生成。
+        "template_status": "honest_preview",
+        "status_label": "通用预览",
+        "generation_backend": "honest_fallback",
+        "real_generation": False,
+        "fallback_mode": True,
+        "result_identity": "通用文本结果",
+        "boundary_note": "通用兜底模板：当前仅提供通用文本预览，非题材化真实生成。",
+        "qa_expectation": "兜底模板，无强制题材分类要求。",
+        "frontend_badge": "通用预览",
+        # 通用兜底 growth_loop：保证前端/QA 始终能读到结构化传播闭环，但不冒充 viral。
+        "growth_loop": {
+            "has_share_cta": True,
+            "share_cta_label": "分享结果",
+            "share_title": "看看我用它生成的结果",
+            "share_copy": "一键生成，分享解锁完整高清结果",
+            "has_unlock": True,
+            "unlock_type": "share_to_unlock",
+            "unlock_hint": "分享解锁高清无水印结果",
+            "has_watermark": True,
+            "watermark_label": "MiniForge 水印",
+            "remove_watermark_supported": True,
+            "remove_watermark_condition": "分享后解锁去水印结果",
+            "brand_exposure": True,
+            "brand_label": "MiniForge 出品 · 结果附小程序码",
+            "download_supported": False,
+            "export_supported": False,
+            "export_label": "导出入口已预留",
+            "capability_mode": "fallback_preview",
+            "capability_note": "通用兜底模板：当前仅提供通用预览，非题材化真实生成。",
+            "result_layer_logic": "结果页展示通用文本结果 + 含水印预览，分享 CTA 引导传播，解锁后去水印。",
+        },
     }
 
 
@@ -168,4 +338,6 @@ def build_template_blueprint(template: str, app: dict, prd_json: dict) -> dict:
         "mock_examples": cfg["mock_examples"],
         "source_template_config": cfg,
         "is_fallback": False,
+        "growth_loop": _growth_loop_from_config(template, cfg),
+        **_capability_from_config(cfg),
     }

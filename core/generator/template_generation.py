@@ -6,8 +6,10 @@
 设计：
 - 每个模板有自己的 prompt adapter（把社交输入转成高质量出图 prompt），
   业务前端不直接拼复杂 prompt。
-- 统一返回 {ok, template_id, preview_type, result{...}} 或抛 ImageGenerationError。
-- 白名单：目前只 ai-image + avatar-viral；新增模板在此登记。
+- 统一返回 {ok, template_id, preview_type, real_generation, fallback_mode,
+  boundary_note, result{...}} 或抛 ImageGenerationError。
+- 白名单 SUPPORTED_TEMPLATES：ai-image + avatar-viral + sticker-viral + pet-talk-viral
+  （核心可跑通真实链路）；funny/blessing 等诚实预览型模板不在白名单，走前端 honest fallback。
 """
 
 from __future__ import annotations
@@ -170,6 +172,9 @@ def generate_template(
             "ok": True,
             "template_id": "avatar-viral",
             "preview_type": "avatar",
+            "real_generation": True,
+            "fallback_mode": False,
+            "boundary_note": "真实出图后端生成头像；不做真人换脸 / 证件照法律效力 / 视频头像。",
             "result": {
                 "image_url": result.get("image_url"),
                 "image_base64": result.get("image_base64"),
@@ -187,6 +192,9 @@ def generate_template(
             "ok": True,
             "template_id": "sticker-viral",
             "preview_type": "stickerPack",
+            "real_generation": True,
+            "fallback_mode": False,
+            "boundary_note": "真实出图后端生成整套表情贴纸；不做侵权 IP 表情。",
             "result": {
                 "image_url": result.get("image_url"),
                 "image_base64": result.get("image_base64"),
@@ -198,18 +206,24 @@ def generate_template(
         }
 
     if template_id == "pet-talk-viral":
-        # 边界：当前产出「会说话的宠物」视频封面静态图，真实视频/配音为流程预留。
+        # 边界：核心链路跑通，产出「会说话的宠物」预览/封面/海报（真实出图）；
+        # 真实动态视频 / 配音为后续能力增强边界，不在当前产出范围。
+        # 故 real_generation=True（链路真跑通）但 video_supported=False（非动态视频），
+        # 文案只说「预览/封面已生成」，不说「完整视频已生成」。
         final_prompt = build_pet_talk_prompt(inp)
         result = generate(final_prompt, style=(inp.get("style") or ""), aspect_ratio=aspect_ratio)
         return {
             "ok": True,
             "template_id": "pet-talk-viral",
             "preview_type": "petVideo",
-            "video_supported": False,  # 诚实标注：暂不产出真实视频，仅静态封面预览
+            "real_generation": True,
+            "fallback_mode": False,
+            "video_supported": False,  # 非动态视频：当前产出静态预览/封面/海报
+            "boundary_note": "核心链路跑通，产出宠物说话预览/封面/海报；真实动态视频与配音为后续增强边界。",
             "result": {
                 "image_url": result.get("image_url"),
                 "image_base64": result.get("image_base64"),
-                "title": "宠物说话预览（视频生成为流程预留）",
+                "title": "宠物说话预览已生成",
                 "caption": _pet_talk_caption(inp),
                 "prompt": raw_prompt,
                 "metadata": result.get("metadata", {}),
@@ -222,6 +236,9 @@ def generate_template(
         "ok": True,
         "template_id": "ai-image",
         "preview_type": "image",
+        "real_generation": True,
+        "fallback_mode": False,
+        "boundary_note": "真实出图后端生成图片；不做完整视频剪辑 / 专业批量修图。",
         "result": {
             "image_url": result.get("image_url"),
             "image_base64": result.get("image_base64"),
