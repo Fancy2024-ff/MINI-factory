@@ -17,20 +17,43 @@ npm install
 npm run dev
 ```
 
-运行一次试运行：
+运行正式主流程（抓取 → 机会队列 → 生成）：
 
 ```bash
-python core/pipeline/runner.py --mode demo
+# 一键
+python -m core.pipeline.auto_runner --regions CN,US --platforms app_store --limit 10 --max-generate 1
+# 或分步
+python core/pipeline/runner.py --mode crawl --regions CN,US --platforms app_store
+python core/pipeline/runner.py --mode queue
 ```
 
 > 说明：后端统一入口为 `apps/api/main.py`，流水线统一入口为
-> `core/pipeline/runner.py`。没有其他入口。
+> `core/pipeline/runner.py`，一键编排为 `core/pipeline/auto_runner.py`。抓取实现统一在
+> `core/opportunity/crawl_runner.py`。
+
+### 日常抓取脚本（正式）
+
+`scripts/crawl_opportunities.py`：presets + 摘要 + 空队列告警，供日常抓取/排查/定时任务。
+
+```bash
+python scripts/crawl_opportunities.py --preset quick --dry-run
+python scripts/crawl_opportunities.py --preset cn --limit 20
+python scripts/crawl_opportunities.py --preset global --limit 20
+# PowerShell:  .\scripts\crawl_opportunities.ps1 --preset cn --limit 20
+```
+
+presets：cn / global / asia / quick / top / search。`--regions/--platforms/--categories/`
+`--entry-types/--limit/--max-tasks` 可覆盖 preset。`--dry-run` 不写盘。
+queue_pending=0 时打印 warning（rating filter / 关键词未命中 / 已 processed / 数据源无结果）。
 
 ## 生产运行输入
 
-唯一路径（canonical）：`data/inputs/real/apps.json`
+正式数据源（canonical）：`data/opportunity/opportunity-queue.json`
+（由 `core/opportunity/crawl_runner.py` 抓取生成；不来自手动导入或样例）。
 
-不存在其他兼容路径。导入接口 `POST /api/real-inputs/apps` 也只写这一个文件。
+> dev-only / legacy：`--mode demo`（样例 `data/samples/apps.json`）与
+> `--mode real`（手动导入 `data/inputs/real/apps.json`）仅供本地开发与兼容旧 API 测试，
+> 不是正式主流程。
 
 ## 产物位置
 

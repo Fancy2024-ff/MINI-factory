@@ -38,7 +38,9 @@
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
-| 本地数据读取 | ✅ | data/samples（demo）+ data/inputs/real/apps.json（real，唯一 canonical 路径） |
+| 市场抓取 | ✅ | core/opportunity/crawl_runner：App Store/Google Play 多地区、榜单(top_free/top_grossing)+搜索 |
+| 机会队列 | ✅ | candidate-pool → feature-opportunities → opportunity-queue（正式数据源） |
+| 数据读取 | ✅ | 正式：data/opportunity/opportunity-queue.json；data/samples(demo)/data/inputs/real(real) 仅 dev-only/legacy |
 | 机会评分 | ✅ | 6 维度本地规则（Viral Score 为核心维度，权重 0.25） |
 | 传播力评分 | ✅ | Viral Score 8 维度，参与候选选择与机会决策 |
 | 模板工厂 | ✅ | 5 类传播型模板（avatar/sticker/pet-talk/funny-video/blessing-video）真实可构建 |

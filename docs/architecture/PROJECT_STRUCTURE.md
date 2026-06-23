@@ -19,7 +19,9 @@ miniapp-factory/
 │   ├── runtime/             # config / context / artifacts / database / manifest
 │   └── shared/              # 跨域公共 schema / types
 ├── data/
-│   ├── inputs/              # 输入目录：demo/real
+│   ├── opportunity/         # 正式：抓取产物 + opportunity-queue（主数据源）
+│   ├── inputs/              # 手动导入 [legacy/dev-only]
+│   ├── samples/             # 样例数据 [dev-only]
 │   ├── outputs/             # 每次 job 产物
 │   ├── platforms/           # 平台库
 │   └── platform-auth/       # 平台授权配置模板/本地密钥

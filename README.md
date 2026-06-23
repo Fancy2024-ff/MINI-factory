@@ -20,26 +20,58 @@
 
 ## 快速开始
 
-### 运行 Demo Pipeline
+### 主链路（正式）：抓取 → 机会发现 → 生成
+
+正式数据流：
+
+```
+crawl market data (App Store / Google Play, 多地区, 榜单+搜索)
+  → candidate-pool（标准化去重）
+  → feature-opportunities（大 App 拆功能）
+  → opportunity-queue（生产队列）
+  → queue/auto generation（消费队列生成小程序）
+  → QA / growth / publish 产物
+```
 
 ```bash
-python core/pipeline/runner.py
+# 一键主流程：抓取 → 机会队列 → 生成一个 feature 级小程序
+python -m core.pipeline.auto_runner --job-id auto-001 \
+    --regions CN,US --platforms app_store --limit 10 --max-generate 1
+
+# 或分步：
+python core/pipeline/runner.py --mode crawl --regions CN,US --platforms app_store  # 只抓取生成队列
+python core/pipeline/runner.py --mode queue                                        # 消费队列生成（默认模式）
 ```
+
+正式输入来自 `data/opportunity/opportunity-queue.json`（由 `core.opportunity.crawl_runner` 生成），
+不再来自手动导入或样例数据。
+
+### 日常抓取脚本
+
+`scripts/crawl_opportunities.py` 是正式抓取入口（presets + 摘要 + 空队列告警），适合日常/定时任务：
+
+```bash
+python scripts/crawl_opportunities.py --preset quick --dry-run   # 小规模测试
+python scripts/crawl_opportunities.py --preset cn --limit 20     # 只抓 CN App Store
+python scripts/crawl_opportunities.py --preset global --limit 20 # 全地区 App Store + Google Play
+# PowerShell 薄包装：
+#   .\scripts\crawl_opportunities.ps1 --preset cn --limit 20
+```
+
+presets：`cn`(CN App Store) / `global`(10 地区双平台) / `asia`(亚洲) / `quick`(快测) /
+`top`(只榜单) / `search`(只搜索)。显式 `--regions/--platforms/--categories/--entry-types/--limit`
+覆盖 preset。queue_pending=0 时脚本打印 warning 与可能原因。
+
+> demo / real 模式仅 dev-only / legacy（本地开发、兼容旧 API 测试），非主流程，勿用于正式生产。
 
 执行后生成：
 ```
 data/outputs/{jobId}/
-  candidate.json          - 选中的候选 App
-  analysis.json           - 需求分析
-  gap-check.json          - 覆盖检查
-  opportunity-report.json - 机会评分
-  prd.md                  - 产品文档
-  prd.json                - 结构化 PRD
-  listing-materials.md    - 上架材料
-  listing-materials.json  - 上架材料（结构化）
+  prd.md / prd.json       - 产品文档
+  listing-materials.*     - 上架材料
   human-actions.md        - 人工操作指南
   qa-report.json          - 质量检查报告
-  pipeline.log            - Pipeline 运行日志
+  template-selection.json - 选中模板
   generated/miniapp/      - 小程序项目代码
     dist/build/mp-weixin/ - 构建产物（可导入微信开发者工具）
 ```

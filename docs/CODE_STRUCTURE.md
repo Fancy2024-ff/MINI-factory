@@ -47,28 +47,30 @@ miniapp-factory/
 
 | 场景 | 命令 | 说明 |
 |------|------|------|
-| 运行 pipeline | `python core/pipeline/runner.py --mode demo` | 样例数据 |
-| 运行 pipeline | `python core/pipeline/runner.py --mode real` | 真实数据 |
+| 一键主流程 | `python -m core.pipeline.auto_runner --regions CN,US --platforms app_store --max-generate 1` | 抓取→队列→生成（正式） |
+| 抓取生成队列 | `python core/pipeline/runner.py --mode crawl --regions CN,US --platforms app_store` | 只抓取（正式） |
+| 消费队列生成 | `python core/pipeline/runner.py --mode queue` | 默认模式（正式） |
+| 运行 pipeline | `python core/pipeline/runner.py --mode demo` | 样例数据 [dev-only，非主流程] |
+| 运行 pipeline | `python core/pipeline/runner.py --mode real` | 手动导入 [legacy，非主流程] |
 | 启动后端 | `python apps/api/main.py` | FastAPI on :8000 |
 | 启动前端 | `cd apps/web && npm run dev` | Vite on :5173 |
 
 ## 数据流
 
 ```
-apps.json → MarketInput → DemandAnalysis → GapCheck → OpportunityScore
-  → ViralScore → PRD → Codegen → PublishMaterials → Growth → PublishPackage
-  → EngineeringQA → GrowthComplianceQA → Readiness
+crawl (App Store / Google Play 多地区, 榜单+搜索)
+  → candidate-pool（标准化去重）
+  → feature-opportunities（大 App 拆功能）
+  → opportunity-queue（生产队列, 正式数据源）
+  → queue/auto generation
+      → PRD → Codegen → PublishMaterials → Growth → PublishPackage
+      → EngineeringQA → GrowthComplianceQA → Readiness
   → data/outputs/{jobId}/
-      candidate.json
-      analysis.json
-      gap-check.json
-      opportunity-report.json
       prd.md / prd.json
       generated/miniapp/ (可 build)
       listing-materials.md / .json
-      publish-package/
-      submit-status.json
-      qa-report.json
-      pipeline-report.json
-      generator-source.json
+      publish-package/ / submit-status.json
+      qa-report.json / pipeline-report.json / template-selection.json / generator-source.json
+  → data/opportunity/  (crawl 产物: candidate-pool / feature-opportunities /
+      opportunity-queue / crawl-report / processed-apps)
 ```
