@@ -34,6 +34,8 @@ class AppInfo(BaseModel):
     description: str = ""
     downloads: int = 0
     rating: float = 0.0
+    review_count: int = 0
+    developer: str = ""
     features: list[str] = Field(default_factory=list)
     ai_related: bool = True
     discovered_at: datetime = Field(default_factory=datetime.now)

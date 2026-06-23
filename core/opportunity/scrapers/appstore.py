@@ -1,118 +1,168 @@
 """
 App Store data scraper（机会发现：App Store 数据源）。
-Uses iTunes Search API (free, no key required).
-Falls back to Qimai API when configured.
+
+入口（entry_type）：
+- search：iTunes Search API（关键词搜索，非榜单；best_rank 是搜索结果位置）。
+- top_free / top_grossing：Apple RSS 榜单（真实热门排名；best_rank 是榜单名次）。
+
+关键词来自 crawl_config（单一事实源），scraper 不再自己决定搜什么。
+所有正式请求经 fetch_policy（统一 UA / timeout / pace / retry）。
+Qimai API 在配置 key 时作为中国区增强源。
 """
 
-import httpx
+from __future__ import annotations
 
 from core.runtime.config import QIMAI_API_KEY
+from core.opportunity import crawl_config as cfg
+from core.opportunity import fetch_policy
 from core.shared.models import AppInfo, AppSource
 
-
-# iTunes Search API - 免费，无需 API Key
 ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
+# Apple RSS 榜单（免费，无需 key）。feed 类型：topfreeapplications / topgrossingapplications。
+# genre URL：按类目真实生效，避免不同类目抓到同一批全站榜单。
+APPLE_RSS_URL = "https://itunes.apple.com/{country}/rss/{feed}/limit={limit}/genre={genre}/json"
+_RSS_FEED = {cfg.TOP_FREE: "topfreeapplications", cfg.TOP_GROSSING: "topgrossingapplications"}
 
-# AI 相关搜索关键词
-AI_SEARCH_TERMS = [
-    "AI writing", "AI assistant", "AI photo", "AI translate",
-    "AI chat", "AI art", "AI productivity", "AI education",
-]
+
+class AppStoreGenreUnsupported(Exception):
+    """category 无 Apple genre 映射，榜单入口不可用（由 crawl_runner 标 unsupported）。"""
 
 
 def fetch_ai_apps_appstore(
     category: str = "ai",
     limit: int = 50,
     country: str = "us",
+    entry_type: str = cfg.SEARCH,
+    keywords: list[str] | None = None,
 ) -> list[AppInfo]:
+    """抓取 App Store 数据。
+
+    entry_type=search → iTunes Search（关键词）；top_free/top_grossing → Apple RSS 榜单（按 genre）。
+    keywords 为空时从 crawl_config 取该 category 的关键词（单一事实源）。
     """
-    Fetch AI-related apps from App Store.
-    Uses free iTunes Search API by default.
-    Uses Qimai API when key is configured (Chinese market data).
-    """
+    if entry_type in (cfg.TOP_FREE, cfg.TOP_GROSSING):
+        return _fetch_via_rss(entry_type, limit, country, category)
+
     if QIMAI_API_KEY:
         qimai_results = _fetch_via_qimai(category, limit, country)
         if qimai_results:
             return qimai_results
 
-    return _fetch_via_itunes(category, limit, country)
+    terms = keywords or cfg.keywords_for_category(category)
+    return _fetch_via_itunes(terms, limit, country)
 
 
-def _fetch_via_itunes(category: str, limit: int, country: str) -> list[AppInfo]:
-    """Fetch from iTunes Search API (free, no key needed)."""
-    search_terms = _get_search_terms(category)
+def appstore_rss_url(entry_type: str, limit: int, country: str, category: str) -> str:
+    """构造 Apple RSS 榜单 URL（含 genre）。无 genre 映射抛 AppStoreGenreUnsupported。"""
+    genre = cfg.appstore_genre(category)
+    if not genre:
+        raise AppStoreGenreUnsupported(f"App Store 类目 {category} 无 genre 映射，榜单不可用")
+    return APPLE_RSS_URL.format(country=country, feed=_RSS_FEED[entry_type], limit=limit, genre=genre)
+
+
+def _fetch_via_itunes(search_terms: list[str], limit: int, country: str) -> list[AppInfo]:
+    """iTunes Search API（免费）。每个关键词请求之间 pace，单请求级限速。"""
+    if not search_terms:
+        return []
     seen_ids: set[str] = set()
     apps: list[AppInfo] = []
-
     per_term_limit = max(10, limit // len(search_terms))
 
-    for term in search_terms:
+    for idx, term in enumerate(search_terms):
         if len(apps) >= limit:
             break
+        if idx > 0:
+            fetch_policy.pace()  # 多关键词循环：每次请求之间也限速
         try:
-            resp = httpx.get(
-                ITUNES_SEARCH_URL,
-                params={
-                    "term": term,
-                    "country": country,
-                    "media": "software",
-                    "limit": per_term_limit,
-                },
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-            for item in data.get("results", []):
-                app_id = item.get("bundleId", "")
-                if app_id in seen_ids:
-                    continue
-                seen_ids.add(app_id)
-
-                # Parse download estimate from rating count
-                rating_count = item.get("userRatingCount", 0)
-                # Rough estimate: ratings × 50 ≈ downloads
-                estimated_downloads = rating_count * 50
-
-                app = AppInfo(
-                    name=item.get("trackName", ""),
-                    app_id=app_id,
-                    source=AppSource.APP_STORE,
-                    category=item.get("primaryGenreName", category),
-                    description=item.get("description", "")[:500],
-                    downloads=estimated_downloads,
-                    rating=float(item.get("averageUserRating", 0)),
-                    features=_extract_features(item.get("description", "")),
+            data = fetch_policy.with_retry(
+                lambda: fetch_policy.get_json(
+                    ITUNES_SEARCH_URL,
+                    params={"term": term, "country": country, "media": "software", "limit": per_term_limit},
                 )
-                apps.append(app)
-
-        except Exception as e:
-            print(f"[iTunes] Search failed for '{term}': {e}")
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[iTunes] Search failed for '{term}' ({country}): {e}")
             continue
 
-    # Sort by estimated popularity
+        for item in data.get("results", []):
+            app_id = item.get("bundleId", "") or str(item.get("trackId", ""))
+            if not app_id or app_id in seen_ids:
+                continue
+            seen_ids.add(app_id)
+            rating_count = item.get("userRatingCount", 0) or 0
+            apps.append(AppInfo(
+                name=item.get("trackName", ""),
+                app_id=app_id,
+                source=AppSource.APP_STORE,
+                category=item.get("primaryGenreName", ""),
+                description=item.get("description", "")[:500],
+                downloads=rating_count * 50,
+                rating=float(item.get("averageUserRating", 0) or 0),
+                review_count=rating_count,
+                features=_extract_features(item.get("description", "")),
+                developer=item.get("artistName", ""),
+            ))
     apps.sort(key=lambda a: a.downloads, reverse=True)
     return apps[:limit]
 
 
+def _fetch_via_rss(entry_type: str, limit: int, country: str, category: str) -> list[AppInfo]:
+    """Apple RSS 榜单（top_free / top_grossing），按 category→genre 真实生效。
+
+    best_rank = 榜单名次。无 genre 映射抛 AppStoreGenreUnsupported（不假装成功）。
+    """
+    url = appstore_rss_url(entry_type, limit, country, category)
+    data = fetch_policy.with_retry(lambda: fetch_policy.get_json(url))
+    entries = (data.get("feed", {}) or {}).get("entry", []) or []
+    if isinstance(entries, dict):
+        entries = [entries]
+
+    apps: list[AppInfo] = []
+    for item in entries:
+        name = _rss_label(item.get("im:name"))
+        app_id = _rss_app_id(item)
+        if not app_id:
+            continue
+        apps.append(AppInfo(
+            name=name,
+            app_id=app_id,
+            source=AppSource.APP_STORE,
+            category=_rss_label(item.get("category", {}).get("attributes", {}).get("label", "")) if isinstance(item.get("category"), dict) else "",
+            description=_rss_label(item.get("summary", "")),
+            downloads=0,
+            rating=0.0,
+            developer=_rss_label(item.get("im:artist")),
+        ))
+    return apps[:limit]
+
+
+def _rss_label(node) -> str:
+    if isinstance(node, dict):
+        return node.get("label", "") or ""
+    return node or ""
+
+
+def _rss_app_id(item: dict) -> str:
+    """从 RSS entry 提取 App ID（id 节点的 im:id 属性，或 URL 末段）。"""
+    idnode = item.get("id", {})
+    if isinstance(idnode, dict):
+        attrs = idnode.get("attributes", {}) or {}
+        if attrs.get("im:id"):
+            return str(attrs["im:id"])
+        label = idnode.get("label", "") or ""
+        if "/id" in label:
+            return label.rsplit("/id", 1)[-1].split("?")[0]
+    return ""
+
+
 def _get_search_terms(category: str) -> list[str]:
-    """Get search terms based on category."""
-    terms_map = {
-        "ai": ["AI writing", "AI assistant", "AI photo editor", "AI translate", "AI chat", "AI productivity"],
-        "photo": ["AI photo editor", "AI avatar", "AI art generator", "photo enhance AI"],
-        "education": ["AI tutor", "AI language learning", "AI study", "AI homework"],
-        "utilities": ["AI scanner", "AI keyboard", "AI summarize", "AI voice"],
-        "entertainment": ["AI music", "AI video", "AI face", "AI story"],
-    }
-    return terms_map.get(category, terms_map["ai"])
+    """[兼容 fallback] 旧关键词表。主路径用 crawl_config.keywords_for_category。"""
+    return cfg.keywords_for_category(category)
 
 
 def _extract_features(description: str) -> list[str]:
-    """Extract key features from app description."""
     features = []
-    # Look for bullet-point style features
-    lines = description.split("\n")
-    for line in lines:
+    for line in description.split("\n"):
         line = line.strip()
         if line.startswith(("•", "-", "✓", "✔", "★", "·")) and len(line) > 5:
             features.append(line.lstrip("•-✓✔★· "))
@@ -122,48 +172,31 @@ def _extract_features(description: str) -> list[str]:
 
 
 def _fetch_via_qimai(category: str, limit: int, country: str) -> list[AppInfo]:
-    """Fetch from Qimai (七麦) API."""
+    """Qimai (七麦) API（配置 key 时的中国区增强源）。"""
     try:
-        url = "https://api.qimai.cn/rank/indexPlus/brand_id/1"
-        headers = {"Authorization": f"Bearer {QIMAI_API_KEY}"}
-        params = {
-            "genre": _category_to_genre_id(category),
-            "country": country,
-            "device": "iphone",
-            "page": 1,
-            "limit": limit,
-        }
-
-        response = httpx.get(url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-
+        data = fetch_policy.get_json(
+            "https://api.qimai.cn/rank/indexPlus/brand_id/1",
+            params={"genre": _category_to_genre_id(category), "country": country,
+                    "device": "iphone", "page": 1, "limit": limit},
+        )
         apps = []
         for item in data.get("appData", []):
-            app = AppInfo(
-                name=item.get("appInfo", {}).get("appName", ""),
-                app_id=item.get("appInfo", {}).get("appId", ""),
+            info = item.get("appInfo", {})
+            apps.append(AppInfo(
+                name=info.get("appName", ""),
+                app_id=info.get("appId", ""),
                 source=AppSource.APP_STORE,
                 category=category,
-                description=item.get("appInfo", {}).get("description", ""),
-                downloads=item.get("appInfo", {}).get("downloads", 0),
-                rating=float(item.get("appInfo", {}).get("score", 0)),
-            )
-            apps.append(app)
-
+                description=info.get("description", ""),
+                downloads=info.get("downloads", 0),
+                rating=float(info.get("score", 0) or 0),
+            ))
         return apps
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"[Qimai] API fetch failed: {e}")
         return []
 
 
 def _category_to_genre_id(category: str) -> str:
-    """Map category name to Qimai genre ID."""
-    mapping = {
-        "ai": "6013",
-        "photo": "6008",
-        "education": "6017",
-        "utilities": "6002",
-        "entertainment": "6016",
-    }
-    return mapping.get(category, "6013")
+    return {"ai": "6013", "photo": "6008", "education": "6017",
+            "utilities": "6002", "entertainment": "6016"}.get(category, "6013")
