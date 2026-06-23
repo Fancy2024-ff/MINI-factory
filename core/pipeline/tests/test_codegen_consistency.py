@@ -210,14 +210,36 @@ def test_generation_api_config_present(generated):
 
 
 def test_generation_service_has_api_mode_path(generated):
-    """generation.ts keeps mock mode but can call apps/api for ai-image."""
+    """generation.ts is API-first: calls apps/api for ai-image AND template models."""
     miniapp_dir, _ = generated
     txt = (miniapp_dir / "src" / "services" / "generation.ts").read_text(encoding="utf-8")
     assert "callRealApi" in txt
     assert "GENERATION_MODE" in txt
     assert "IMAGE_GENERATION_PATH" in txt
+    # 题材模板（avatar/sticker/pet-talk）走 template 接口，不再仅 ai-image
+    assert "TEMPLATE_GENERATION_PATH" in txt
     assert "Authorization" not in txt
     assert "Bearer " not in txt
+
+
+def test_generation_service_api_template_coverage(generated):
+    """真实链路覆盖 ai-image + avatar/sticker/pet-talk；视频模板走诚实 fallback。"""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "services" / "generation.ts").read_text(encoding="utf-8")
+    assert "avatar-viral" in txt and "sticker-viral" in txt and "pet-talk-viral" in txt
+    # 诚实预览：视频模板不伪装真实生成
+    assert "honest_fallback" in txt
+    assert "funny-video-viral" in txt and "blessing-video-viral" in txt
+
+
+def test_generated_api_config_has_template_path(generated):
+    """生成项目 config/api.ts 暴露 template 生成路径，且不含 provider 密钥。"""
+    miniapp_dir, _ = generated
+    cfg = (miniapp_dir / "src" / "config" / "api.ts").read_text(encoding="utf-8")
+    assert "TEMPLATE_GENERATION_PATH" in cfg
+    assert "/api/generation/template" in cfg
+    assert "IMAGE_GENERATION_API_KEY" not in cfg
+    assert "IMAGE_GENERATION_ENDPOINT" not in cfg
 
 
 def test_api_config_default_is_mock_no_token_residue(generated):

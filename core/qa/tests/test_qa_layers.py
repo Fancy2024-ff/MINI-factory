@@ -32,9 +32,14 @@ def _make_miniapp_with_propagation(miniapp_dir: Path):
     )
     (src / "services" / "generation.ts").write_text(
         "import { SELECTED_TEMPLATE } from '../config/template'\n"
+        "import { GENERATION_MODE, IMAGE_GENERATION_PATH, TEMPLATE_GENERATION_PATH } from '../config/api'\n"
         "export interface GeneratedResult { id: string; template: string; "
         "shareTitle: string; shareCopy: string; unlockHint: string; watermarkEnabled: boolean }\n"
+        "async function callRealApi(): Promise<GeneratedResult | null> {\n"
+        "  if (GENERATION_MODE !== 'api') return null\n"
+        "  void IMAGE_GENERATION_PATH; void TEMPLATE_GENERATION_PATH; return null\n}\n"
         "export async function mockGenerate(input: any): Promise<GeneratedResult> {\n"
+        "  const real = await callRealApi(); if (real) return real\n"
         "  switch (SELECTED_TEMPLATE) { default: return { id: 'x', template: SELECTED_TEMPLATE, "
         "shareTitle: 's', shareCopy: 'c', unlockHint: 'u', watermarkEnabled: true } }\n}\n",
         encoding="utf-8",

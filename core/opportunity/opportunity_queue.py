@@ -101,6 +101,45 @@ def update_status(
     return queue
 
 
+def find_item(queue: list[dict], queue_id: str) -> dict | None:
+    for item in queue:
+        if item.get("queue_id") == queue_id:
+            return item
+    return None
+
+
+def prioritize(queue: list[dict], queue_id: str) -> dict | None:
+    """把指定 item 提到队列最前（pending 优先消费）。返回被提权的 item。"""
+    item = find_item(queue, queue_id)
+    if item is None:
+        return None
+    queue.remove(item)
+    queue.insert(0, item)
+    item["priority_boosted"] = True
+    item["updated_at"] = _now_iso()
+    return item
+
+
+def skip(queue: list[dict], queue_id: str) -> dict | None:
+    """跳过指定 item（标记 skipped，不再进入消费）。"""
+    item = find_item(queue, queue_id)
+    if item is None:
+        return None
+    item["status"] = "skipped"
+    item["updated_at"] = _now_iso()
+    return item
+
+
+def retry(queue: list[dict], queue_id: str) -> dict | None:
+    """把 failed/skipped item 重置为 pending，可被再次消费。"""
+    item = find_item(queue, queue_id)
+    if item is None:
+        return None
+    item["status"] = "pending"
+    item["updated_at"] = _now_iso()
+    return item
+
+
 def queue_item_to_app_input(item: dict) -> dict:
     """把 queue item 转成 pipeline 需要的 app 输入结构。
 

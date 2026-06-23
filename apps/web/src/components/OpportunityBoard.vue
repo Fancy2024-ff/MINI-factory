@@ -27,7 +27,14 @@ const emit = defineEmits<{
   refresh: []
   'open-view': [view: OpportunityView]
   'update-launch-options': [next: PipelineLaunchOptions]
+  'queue-action': [payload: { action: 'prioritize' | 'skip' | 'retry' | 'generate_now'; queueId: string }]
 }>()
+
+function runQueueAction(action: 'prioritize' | 'skip' | 'retry' | 'generate_now', item: any) {
+  const queueId = item?.queue_id
+  if (!queueId) return
+  emit('queue-action', { action, queueId })
+}
 
 const presets: LaunchPreset[] = [
   {
@@ -117,6 +124,24 @@ function qaState() {
   const qa = props.currentJob?.artifacts?.['qa-report.json']
   if (!qa) return '等待生成'
   return qa.passed ? 'QA 通过' : 'QA 待修复'
+}
+
+// 当前 job 的传播闭环状态：读 growth-qa 的实际检查项，而不是只看文件是否存在。
+function viralLoopState() {
+  const g = props.currentJob?.artifacts?.['growth-qa-report.json']
+  const c = g?.checks
+  if (!c) return '传播闭环：等待生成'
+  const share = c.result_has_share_cta
+  const unlock = c.result_has_unlock_hook
+  const watermark = c.result_has_watermark
+  const api = c.generation_api_contract
+  const parts = [
+    `分享${share ? '✓' : '✗'}`,
+    `解锁${unlock ? '✓' : '✗'}`,
+    `水印${watermark ? '✓' : '✗'}`,
+    `真实API${api ? '✓' : '✗'}`,
+  ]
+  return `传播闭环：${parts.join(' · ')}`
 }
 
 function queueHealthText() {
@@ -294,18 +319,25 @@ function openView(view: OpportunityView) {
         <h2>下一批要生产什么，已经排好。</h2>
       </div>
       <div v-if="topQueue().length" class="queue-list">
-        <button
+        <div
           v-for="item in topQueue()"
           :key="item.queue_id"
           class="queue-item"
-          @click="openView('queue')"
         >
-          <div>
-            <strong>{{ item.feature_name_cn || item.feature_key }}</strong>
-            <span>{{ item.parent_app_name || '来源 App' }} · {{ item.selected_template || 'template' }}</span>
+          <button class="queue-item-main" @click="openView('queue')">
+            <div>
+              <strong>{{ item.feature_name_cn || item.feature_key }}</strong>
+              <span>{{ item.parent_app_name || '来源 App' }} · {{ item.selected_template || 'template' }}</span>
+            </div>
+            <em>{{ pct(item.final_score) }}</em>
+          </button>
+          <div class="queue-item-actions">
+            <button class="qa-btn" :disabled="running" @click.stop="runQueueAction('generate_now', item)">立即生成</button>
+            <button class="qa-btn ghost" @click.stop="runQueueAction('prioritize', item)">提权</button>
+            <button class="qa-btn ghost" @click.stop="runQueueAction('retry', item)">重试</button>
+            <button class="qa-btn ghost" @click.stop="runQueueAction('skip', item)">跳过</button>
           </div>
-          <em>{{ pct(item.final_score) }}</em>
-        </button>
+        </div>
       </div>
       <div v-else class="empty-state">
         <strong>还没有机会队列</strong>
@@ -332,6 +364,7 @@ function openView(view: OpportunityView) {
       <span class="section-label">Factory Signal</span>
       <h2>{{ latestJobName() }}</h2>
       <p class="build-copy">{{ qaState() }} · {{ currentJob?.id || '暂无 job' }}</p>
+      <div class="signal-copy">{{ viralLoopState() }}</div>
       <div class="signal-copy">{{ queueHealthText() }}</div>
       <div class="build-chip">{{ mode.toUpperCase() }}</div>
     </article>

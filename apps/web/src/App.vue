@@ -117,6 +117,19 @@ async function refreshOpportunityData() {
   await loadOpportunityDetails()
 }
 
+async function handleQueueAction(p: { action: 'prioritize' | 'skip' | 'retry' | 'generate_now'; queueId: string }) {
+  try {
+    const res = await api.queueAction(p.action, p.queueId)
+    // generate_now 会启动 queue 生成，跟进状态轮询
+    if (p.action === 'generate_now' && res.job_id) {
+      startStatusPolling(res.job_id)
+    }
+    await refreshOpportunityData()
+  } catch (e: any) {
+    error.value = e.message
+  }
+}
+
 async function selectJob(id: string) {
   menuOpen.value = false
   try {
@@ -314,6 +327,7 @@ onBeforeUnmount(() => {
           @refresh="refreshOpportunityData"
           @open-view="setOpportunityView"
           @update-launch-options="updateLaunchOptions"
+          @queue-action="handleQueueAction"
         />
         <OpportunityExplorer
           v-if="activeTab === 'opportunities'"

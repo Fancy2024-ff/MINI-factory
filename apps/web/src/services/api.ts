@@ -71,6 +71,11 @@ export const api = {
   getOpportunityQueue: () => get<{ items: any[]; total: number }>('/api/opportunities/queue'),
   getOpportunityCandidates: () => get<{ items: any[]; total: number }>('/api/opportunities/candidates'),
   getOpportunityFeatures: () => get<{ items: any[]; total: number }>('/api/opportunities/features'),
+  queueAction: (action: 'prioritize' | 'skip' | 'retry' | 'generate_now', queueId: string, payload: any = {}) =>
+    post<{ ok: boolean; action: string; queue_id: string; status?: string; job_id?: string }>(
+      '/api/opportunities/queue/action',
+      { action, queue_id: queueId, payload },
+    ),
   getRealInputs: () => get<{ apps: any[]; exists: boolean }>('/api/real-inputs/apps'),
   saveRealInputs: (apps: any[]) => post('/api/real-inputs/apps', apps),
   getPlatforms: () => get<{ platforms: any[]; total: number }>('/api/platforms'),

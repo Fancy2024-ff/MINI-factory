@@ -215,6 +215,14 @@ class TemplateGenerationRequest(BaseModel):
     input: dict = Field(default_factory=dict)
 
 
+class QueueActionRequest(BaseModel):
+    """机会队列动作：prioritize（提权）/ skip（跳过）/ retry（重试）/ generate_now（立即生成）。"""
+
+    action: Literal["prioritize", "skip", "retry", "generate_now"]
+    queue_id: str
+    payload: dict = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # SECTION: Pipeline
 # ---------------------------------------------------------------------------
@@ -608,6 +616,61 @@ def get_opportunity_features(limit: int = Query(default=50, ge=1, le=200)):
     return {"items": _limit_items(features, limit), "total": len(features) if isinstance(features, list) else 0}
 
 
+@app.post("/api/opportunities/queue/action", dependencies=[Depends(verify_api_key)])
+async def opportunity_queue_action(req: QueueActionRequest):
+    """统一队列动作接口：真正改写 opportunity-queue.json，generate_now 触发 queue 生成。
+
+    动作逻辑在 core.opportunity.opportunity_queue（API 只编排）：
+    - prioritize：提到队首，下一次消费优先
+    - skip：标记 skipped，不再消费
+    - retry：failed/skipped 重置为 pending
+    - generate_now：提权 + 启动 queue 模式 pipeline 真正消费该机会
+    """
+    from core.opportunity import opportunity_queue as oq
+
+    queue_path = OPPORTUNITY_DIR / "opportunity-queue.json"
+    queue = oq.load_queue(queue_path)
+    if oq.find_item(queue, req.queue_id) is None:
+        raise HTTPException(404, f"queue_id not found: {req.queue_id}")
+
+    if req.action == "prioritize":
+        oq.prioritize(queue, req.queue_id)
+        oq.save_queue(queue_path, queue)
+        return {"ok": True, "action": "prioritize", "queue_id": req.queue_id, "status": "pending"}
+
+    if req.action == "skip":
+        oq.skip(queue, req.queue_id)
+        oq.save_queue(queue_path, queue)
+        return {"ok": True, "action": "skip", "queue_id": req.queue_id, "status": "skipped"}
+
+    if req.action == "retry":
+        oq.retry(queue, req.queue_id)
+        oq.save_queue(queue_path, queue)
+        return {"ok": True, "action": "retry", "queue_id": req.queue_id, "status": "pending"}
+
+    # generate_now：提权该机会到队首并启动 queue 模式生成（真正执行，不只改状态）。
+    global pipeline_process, pipeline_job_id, pipeline_logs
+    if pipeline_process and pipeline_process.poll() is None:
+        raise HTTPException(409, "Pipeline already running")
+    oq.retry(queue, req.queue_id)        # 确保是 pending
+    oq.prioritize(queue, req.queue_id)   # 提到队首，runner 消费第一个 pending
+    oq.save_queue(queue_path, queue)
+
+    job_id = _generate_job_id()
+    pipeline_job_id = job_id
+    pipeline_logs.clear()
+    cmd = [sys.executable, "-X", "utf8", str(PIPELINE_RUNNER), "--mode", "queue", "--job-id", job_id]
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+    pipeline_process = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace",
+        cwd=str(Path(__file__).parent.parent), env=env,
+    )
+    asyncio.create_task(_stream_pipeline_output(job_id))
+    return {"ok": True, "action": "generate_now", "queue_id": req.queue_id,
+            "accepted": True, "job_id": job_id, "mode": "queue"}
+
+
 # ---------------------------------------------------------------------------
 # SECTION: Platforms
 # ---------------------------------------------------------------------------
@@ -667,7 +730,10 @@ def get_platform_auth_status():
 
 @app.post("/api/platforms/wechat/upload", dependencies=[Depends(verify_api_key)])
 def wechat_upload():
-    """Attempt WeChat upload – fails gracefully if not configured."""
+    """微信代码上传：配置完整且 miniprogram-ci 可用时真正执行上传，否则结构化失败。
+
+    安全：不回显 private_key 内容；只返回 stdout/stderr 摘要 + 稳定原因。
+    """
     config_file = PLATFORM_AUTH_DIR / "wechat.json"
     if not config_file.exists():
         return {"upload_passed": False, "reason": "wechat.json not found in platform-auth"}
@@ -677,21 +743,70 @@ def wechat_upload():
     except Exception as e:
         return {"upload_passed": False, "reason": f"config parse error: {e}"}
 
-    if not config.get("appid") or not config.get("private_key_path"):
+    appid = config.get("appid")
+    pk_path = config.get("private_key_path")
+    if not appid or not pk_path:
         return {"upload_passed": False, "reason": "appid or private_key_path missing"}
-
     if not config.get("upload_enabled"):
         return {"upload_passed": False, "reason": "upload_enabled is false"}
+    if not Path(pk_path).exists():
+        return {"upload_passed": False, "reason": "private_key file not found at private_key_path"}
 
     import shutil
     if not shutil.which("npx"):
         return {"upload_passed": False, "reason": "npx not found on PATH"}
 
+    # 定位最近一次生成产物的 mp-weixin 构建目录
+    project_path = _latest_mp_weixin_dist()
+    if not project_path:
+        return {"upload_passed": False, "reason": "no built mp-weixin dist found; run pipeline first"}
+
+    version = config.get("version") or "1.0.0"
+    desc = config.get("desc") or "auto upload via miniprogram-ci"
+    # 通过 npx miniprogram-ci 执行上传（需本地已装 miniprogram-ci / npx 可拉取）。
+    cmd = [
+        "npx", "miniprogram-ci", "upload",
+        "--pp", str(project_path),
+        "--pkp", str(pk_path),
+        "--appid", str(appid),
+        "--uv", str(version),
+        "--ud", str(desc),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=str(Path(__file__).parent.parent), timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        return {"upload_passed": False, "reason": "miniprogram-ci upload timed out (180s)",
+                "next_action": "检查网络/密钥后重试"}
+    except Exception as e:
+        return {"upload_passed": False, "reason": f"miniprogram-ci invocation failed: {type(e).__name__}"}
+
+    ok = proc.returncode == 0
     return {
-        "upload_passed": False,
-        "reason": "miniprogram-ci integration pending",
-        "config_valid": True,
+        "upload_passed": ok,
+        "appid": appid,
+        "version": version,
+        "stdout_tail": (proc.stdout or "")[-600:],
+        "stderr_tail": (proc.stderr or "")[-600:],
+        "next_action": ("登录微信公众平台 → 版本管理 → 提交审核" if ok
+                        else "上传失败，检查 stderr_tail / appid / 密钥 / 合法域名后重试"),
     }
+
+
+def _latest_mp_weixin_dist() -> Path | None:
+    """返回最近一次生成产物里的 dist/build/mp-weixin 目录（含 app.json）。"""
+    import os as _os
+    candidates = []
+    if OUTPUTS_DIR.exists():
+        for job_dir in OUTPUTS_DIR.iterdir():
+            mp = job_dir / "generated" / "miniapp" / "dist" / "build" / "mp-weixin"
+            if (mp / "app.json").exists():
+                candidates.append(mp)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: _os.path.getmtime(p))
 
 
 # ---------------------------------------------------------------------------

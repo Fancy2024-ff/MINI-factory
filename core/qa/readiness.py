@@ -149,6 +149,12 @@ def build_submission_readiness(best_app: dict, opportunity: dict, qa: dict,
         "target_platforms": [p["platform"] for p in platform_readiness],
         "rejected_platforms": rejected_platforms,
         "platform_readiness": platform_readiness,
+        # 上传能力汇总：是否有平台已配置可自动上传（供仪表盘/submit-status 反映）。
+        "upload_capability": {
+            "any_configured": any_configured,
+            "auto_upload_ready": any(p.get("can_upload") for p in platform_readiness),
+            "uploadable_platforms": [p["platform"] for p in platform_readiness if p.get("can_upload")],
+        },
         "next_action": (
             "可以提交审核" if len(blocking_issues) == 0
             else "当前不能提交审核，请先解决上方 blocking_issues"

@@ -41,6 +41,37 @@ describe('OpportunityBoard', () => {
     await wrapper.get('[data-testid="features-card"]').trigger('click')
     expect(wrapper.emitted('open-view')?.[0]).toEqual(['features'])
   })
+
+  it('emits queue-action for prioritize / retry / skip / generate_now on a queue item', async () => {
+    const wrapper = mount(OpportunityBoard, {
+      props: {
+        summary: {
+          exists: true,
+          dedup_stats: { unique_apps: 5 },
+          feature_stats: { recommended_features: 3 },
+          queue_stats: { pending: 2 },
+          top_queue: [
+            { queue_id: 'q-001', feature_name_cn: 'AI 修图', parent_app_name: 'CapCut',
+              selected_template: 'ai-image', final_score: 84 },
+          ],
+          top_candidates: [],
+          top_features: [],
+          top_templates: {},
+        },
+        currentJob: null,
+        running: false,
+        mode: 'auto',
+        launchOptions: { regions: 'CN', platforms: 'app_store', limit: 5, max_generate: 1 },
+      },
+    })
+
+    const btns = wrapper.findAll('.queue-item-actions .qa-btn')
+    expect(btns.length).toBe(4)  // 立即生成 / 提权 / 重试 / 跳过
+    await btns[0].trigger('click')  // 立即生成 -> generate_now
+    expect(wrapper.emitted('queue-action')?.[0]?.[0]).toEqual({ action: 'generate_now', queueId: 'q-001' })
+    await btns[1].trigger('click')  // 提权
+    expect(wrapper.emitted('queue-action')?.[1]?.[0]).toEqual({ action: 'prioritize', queueId: 'q-001' })
+  })
 })
 
 describe('OpportunityExplorer', () => {

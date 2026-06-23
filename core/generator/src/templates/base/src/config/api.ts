@@ -11,3 +11,5 @@
 export const API_BASE = '__API_BASE__'
 export const GENERATION_MODE: 'mock' | 'api' = '__GENERATION_MODE__'
 export const IMAGE_GENERATION_PATH = '/api/generation/image'
+// 模板级生成接口：avatar / sticker / pet-talk 等题材模板走此路径（结构化 input）。
+export const TEMPLATE_GENERATION_PATH = '/api/generation/template'

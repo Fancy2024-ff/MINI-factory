@@ -59,11 +59,23 @@ def _check_generation_flow(miniapp_dir: Path, checks: dict, issues: list[str]) -
     form_txt = _read(form_page)
     tmpl_txt = _read(tmpl_cfg)
 
-    # 1. 统一生成服务存在且定义核心契约
-    service_ok = bool(service_txt) and "mockGenerate" in service_txt and "GeneratedResult" in service_txt
+    # 1. 统一生成服务存在且定义核心契约（生成入口 + GeneratedResult）。
+    #    允许 api/mock 双模式：入口函数名仍为 mockGenerate（form 调用约定），
+    #    但不再把「必须 mock」当通过条件——真实链路由 api_contract 单独校验。
+    has_entry = "mockGenerate" in service_txt or "generateFromBlueprint" in service_txt
+    service_ok = bool(service_txt) and has_entry and "GeneratedResult" in service_txt
     checks["generation_service_exists"] = service_ok
     if not service_ok:
-        issues.append("缺少统一生成服务 src/services/generation.ts（mockGenerate/GeneratedResult）")
+        issues.append("缺少统一生成服务 src/services/generation.ts（生成入口 / GeneratedResult）")
+
+    # 1b. 真实 API 契约：服务能在 api 模式调用后端生成接口（不强制 mock 主导）。
+    api_contract_ok = bool(service_txt) and "callRealApi" in service_txt and (
+        "GENERATION_MODE" in service_txt
+        and ("TEMPLATE_GENERATION_PATH" in service_txt or "IMAGE_GENERATION_PATH" in service_txt)
+    )
+    checks["generation_api_contract"] = api_contract_ok
+    if not api_contract_ok:
+        issues.append("generation.ts 缺少真实 API 契约（callRealApi/GENERATION_MODE/生成接口路径）")
 
     # 2. 结果页存在
     checks["result_page_exists"] = bool(result_txt)
