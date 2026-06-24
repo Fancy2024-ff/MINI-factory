@@ -314,6 +314,7 @@ def _finalize_run(report: dict, all_records: list[dict], task_count: int, date_s
         "briefs_total": _bstats["total"],
         "briefs_produce": _bstats["produce"],
         "briefs_review": _bstats["review"],
+        "briefs_skip": _bstats["skip"],
     }
 
     if not dry_run:

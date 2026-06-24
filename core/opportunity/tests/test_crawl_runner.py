@@ -66,6 +66,8 @@ def test_crawl_report_has_brief_stats_and_counts():
     assert bs["total"] == bs["produce"] + bs["review"] + bs["skip"]
     c = rep["counts"]
     assert "briefs_total" in c and "briefs_produce" in c and "briefs_review" in c
+    assert "briefs_skip" in c
+    assert c["briefs_total"] == c["briefs_produce"] + c["briefs_review"] + c["briefs_skip"]
     # 队列只接收 produce/review，pending 不超过 produce+review
     assert c["queue_pending"] <= bs["produce"] + bs["review"]
 
