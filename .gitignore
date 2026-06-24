@@ -50,6 +50,7 @@ data/opportunity/market-snapshot.json
 data/opportunity/candidate-pool.json
 data/opportunity/feature-opportunities.json
 data/opportunity/opportunity-queue.json
+data/opportunity/opportunity-briefs.json
 data/opportunity/crawl-report.json
 data/opportunity/processed-apps.json
 !data/opportunity/processed-apps.example.json

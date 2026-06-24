@@ -53,6 +53,23 @@ def test_dry_run_produces_candidate_queue_report():
     assert "data_source_capability" in rep
 
 
+def test_crawl_report_has_brief_stats_and_counts():
+    """crawl_runner 生成机会简报：brief_stats + counts.briefs_* 存在且自洽。"""
+    rep = cr.run_once(
+        regions=["CN", "US"], platforms=["app_store"], categories=["photo"],
+        dry_run=True, appstore_fetch=_fake_appstore, googleplay_fetch=_fake_gp,
+    )
+    bs = rep.get("brief_stats")
+    assert bs is not None
+    for k in ("total", "produce", "review", "skip", "avg_confidence"):
+        assert k in bs
+    assert bs["total"] == bs["produce"] + bs["review"] + bs["skip"]
+    c = rep["counts"]
+    assert "briefs_total" in c and "briefs_produce" in c and "briefs_review" in c
+    # 队列只接收 produce/review，pending 不超过 produce+review
+    assert c["queue_pending"] <= bs["produce"] + bs["review"]
+
+
 def test_google_play_cn_task_is_skipped_with_reason():
     rep = cr.run_once(
         regions=["CN"], platforms=["google_play"], categories=["photo"], entry_types=[cfg.SEARCH],
@@ -220,7 +237,13 @@ def _fake_appstore_ranking_no_rating(category, limit, country, entry_type=cfg.SE
 
 
 def test_top_free_dry_run_queue_pending_positive():
-    """复现命令场景：top_free 抓到数据 → queue_pending > 0（不再被 rating 过滤清零）。"""
+    """复现命令场景：top_free 抓到数据 → 不被 rating 过滤清零。
+
+    注意：自 Opportunity Brief 接入后，队列由 recommendation（produce/review）门控，
+    不再由 rating 门控。本测试保证「rating 缺失不会把榜单 feature 过滤掉」的原始契约：
+    features_recommended 仍 > 0（榜单 feature 进入排名与简报），queue 是否进则由
+    brief 的 confidence/score 决定（thin 数据可能全 skip，属预期）。
+    """
     rep = cr.run_once(
         regions=["CN", "US"], platforms=["app_store"], categories=["photo", "entertainment"],
         entry_types=[cfg.TOP_FREE], limit=5, dry_run=True,
@@ -228,8 +251,13 @@ def test_top_free_dry_run_queue_pending_positive():
     )
     assert rep["counts"]["candidates"] > 0
     assert rep["counts"]["features_total"] > 0
-    assert rep["counts"]["features_recommended"] > 0, "榜单 feature 不应被全部过滤"
-    assert rep["counts"]["queue_pending"] > 0, "queue_pending 必须 > 0"
+    # 原始契约：rating 缺失不应把榜单 feature 过滤掉（仍进入排名 + 生成简报）
+    assert rep["counts"]["features_recommended"] > 0, "榜单 feature 不应被 rating 过滤"
+    assert rep["brief_stats"]["total"] > 0, "榜单 feature 应生成机会简报"
+    # 队列门控改为 brief 驱动：pending == produce + review（skip 不入队）
+    assert rep["counts"]["queue_pending"] == (
+        rep["brief_stats"]["produce"] + rep["brief_stats"]["review"]
+    )
 
 
 def test_candidate_pool_tracks_rating_available():

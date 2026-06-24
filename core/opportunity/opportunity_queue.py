@@ -38,13 +38,18 @@ def build_queue(
     max_retry_count: int = 2,
     skip_processed: bool = True,
     date_str: str | None = None,
+    briefs: list[dict] | None = None,
 ) -> list[dict]:
     """把排序后的 feature 列表转成 queue items。
 
     processed: load_processed() 结果，用于跳过已生产/超重试的 feature。
+    briefs: 可选。提供时按 recommendation 过滤——只接收 produce/review，skip 不入队；
+      review 入队但带 review_required=true。queue item 附带 recommendation /
+      confidence_score / review_required / brief_id（来自对应 brief）。
     """
     processed = processed or {"features": {}}
     date_str = date_str or datetime.now().strftime("%Y%m%d")
+    brief_by_fkey = {b.get("feature_key", ""): b for b in (briefs or [])}
     queue: list[dict] = []
     seq = 0
     for feat in ranked_features:
@@ -54,8 +59,13 @@ def build_queue(
         rc = processed_apps.retry_count(processed, fkey)
         if rc > max_retry_count:
             continue
+        brief = brief_by_fkey.get(fkey)
+        if brief is not None:
+            rec = brief.get("recommendation", "skip")
+            if rec == "skip":
+                continue  # skip 不入队
         seq += 1
-        queue.append({
+        item = {
             "queue_id": f"{date_str}-{seq:03d}",
             "feature_key": fkey,
             "parent_app_key": feat.get("parent_app_key", ""),
@@ -68,7 +78,13 @@ def build_queue(
             "score_breakdown": feat.get("score_breakdown", {}),
             "reason": feat.get("reason", []),
             "required_capabilities": feat.get("required_capabilities", []),
-        })
+        }
+        if brief is not None:
+            item["recommendation"] = brief.get("recommendation", "")
+            item["confidence_score"] = brief.get("confidence_score", 0)
+            item["review_required"] = brief.get("recommendation") == "review"
+            item["brief_id"] = brief.get("brief_id", "")
+        queue.append(item)
     return queue
 
 

@@ -24,6 +24,7 @@ from core.opportunity.candidate_pool import build_candidate_pool
 from core.opportunity.feature_extraction import extract_all
 from core.opportunity.ranking import rank_features
 from core.opportunity.opportunity_queue import build_queue
+from core.opportunity.opportunity_brief import build_briefs, brief_stats
 from core.opportunity import processed_apps
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -252,11 +253,14 @@ def _finalize_run(report: dict, all_records: list[dict], task_count: int, date_s
         min_rating=filters.get("min_rating", 0.0),
     )
     processed = processed_apps.load_processed(PROCESSED_PATH)
+    # 机会简报：在 ranked 之后、queue 之前生成（briefs 驱动队列的 produce/review 过滤）。
+    briefs = build_briefs(ranked, candidates_by_key, date_str=date_str)
     queue = build_queue(
         ranked, processed,
         max_retry_count=filters.get("max_retry_count", 2),
         skip_processed=filters.get("skip_processed_features", True),
         date_str=date_str,
+        briefs=briefs,
     )
 
     # 队列过滤统计：被 processed / 超重试跳过的数量
@@ -298,6 +302,8 @@ def _finalize_run(report: dict, all_records: list[dict], task_count: int, date_s
         "skipped_processed": skipped_processed,
         "skipped_retry_exceeded": skipped_retry,
     }
+    _bstats = brief_stats(briefs)
+    report["brief_stats"] = _bstats
     # 兼容旧字段（测试/CLI 仍读 counts）
     report["counts"] = {
         "raw_records": len(all_records),
@@ -305,12 +311,16 @@ def _finalize_run(report: dict, all_records: list[dict], task_count: int, date_s
         "features_total": len(features),
         "features_recommended": len(ranked),
         "queue_pending": len(queue),
+        "briefs_total": _bstats["total"],
+        "briefs_produce": _bstats["produce"],
+        "briefs_review": _bstats["review"],
     }
 
     if not dry_run:
         _write_json(OPP_DIR / "market-snapshot.json", {"date": date_str, "records": all_records})
         _write_json(OPP_DIR / "candidate-pool.json", candidates)
         _write_json(OPP_DIR / "feature-opportunities.json", features)
+        _write_json(OPP_DIR / "opportunity-briefs.json", briefs)
         _write_json(OPP_DIR / "opportunity-queue.json", queue)
         _write_json(OPP_DIR / "crawl-report.json", report)
         if not PROCESSED_PATH.exists():
