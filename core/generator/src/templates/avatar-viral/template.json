@@ -21,7 +21,7 @@
     "share_copy": "看看哪张最像我，分享后解锁高清无水印头像",
     "has_unlock": true,
     "unlock_type": "share_to_unlock",
-    "unlock_hint": "分享给好友后解锁高清无水印头像和更多风格",
+    "unlock_hint": "看完广告后解锁高清无水印头像下载",
     "has_watermark": true,
     "watermark_label": "MiniForge 头像水印",
     "remove_watermark_supported": true,
@@ -33,7 +33,20 @@
     "export_label": "下载高清头像",
     "capability_mode": "real",
     "capability_note": "当前走真实出图后端生成多风格头像，分享解锁去水印高清版。",
-    "result_layer_logic": "结果页展示多风格头像 + 含水印预览，分享 CTA 引导晒头像，解锁后去水印并开放高清下载。"
+    "result_layer_logic": "结果页展示多风格头像 + 含水印预览，分享 CTA 引导晒头像，解锁后去水印并开放高清下载。",
+    "download_gate": {
+      "enabled": true,
+      "gate_type": "rewarded_ad",
+      "ad_unit_id": "",
+      "required_for": [
+        "download",
+        "remove_watermark"
+      ],
+      "gate_label": "看广告下载高清无水印头像",
+      "reward_label": "已解锁高清无水印头像下载",
+      "unavailable_hint": "开发者未配置广告位，暂不可下载高清结果",
+      "close_hint": "看完广告后才能下载/导出高清结果"
+    }
   },
   "input_fields": [
     {
@@ -53,11 +66,29 @@
     }
   ],
   "result_fields": [
-    { "id": "styles", "label": "风格列表", "type": "list" },
-    { "id": "cover", "label": "头像封面", "type": "image" },
-    { "id": "note", "label": "风格说明", "type": "text" }
+    {
+      "id": "styles",
+      "label": "风格列表",
+      "type": "list"
+    },
+    {
+      "id": "cover",
+      "label": "头像封面",
+      "type": "image"
+    },
+    {
+      "id": "note",
+      "label": "风格说明",
+      "type": "text"
+    }
   ],
-  "pages": ["index", "form", "result", "gallery", "profile"],
+  "pages": [
+    "index",
+    "form",
+    "result",
+    "gallery",
+    "profile"
+  ],
   "share_hooks": [
     "我用 AI 生成了专属头像，快来看！",
     "一键生成多风格 AI 头像，分享解锁高清无水印版"
@@ -74,13 +105,20 @@
     "上传人脸需提示用户授权，不留存原图",
     "生成头像不得用于伪造身份或冒充他人"
   ],
-  "supported_platforms": ["wechat"],
+  "supported_platforms": [
+    "wechat"
+  ],
   "mock_examples": [
     {
       "title": "你的专属 AI 头像",
       "preview_type": "avatar",
       "preview_data": {
-        "styles": ["赛博朋克", "日系动漫", "商务证件", "油画风"],
+        "styles": [
+          "赛博朋克",
+          "日系动漫",
+          "商务证件",
+          "油画风"
+        ],
         "cover": "avatar-preview-placeholder",
         "note": "默认多风格头像"
       },

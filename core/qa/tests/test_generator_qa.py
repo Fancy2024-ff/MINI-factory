@@ -260,6 +260,63 @@ def test_repo_templates_have_no_upload_dishonesty():
     assert not any("上传图片驱动生成" in i for i in result["issues"]), result["issues"]
 
 
+def test_image_field_missing_drives_generation_fails(tmp_path, monkeypatch):
+    """image 字段缺 drives_generation（默认视为参与生成）必须失败（上传链未接入）。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    bad = _good_cfg("avatar-viral")
+    bad["input_fields"] = [
+        # 中性文案（不含"上传照片"），仅靠 drives_generation 缺失就该失败。
+        {"id": "photo", "label": "图片", "type": "image", "required": False, "placeholder": "选择"},
+    ]
+    _write_cfg(tmp_path, "avatar-viral", bad)
+    result = run_generator_qa()
+    assert result["checks"]["template_config:avatar-viral"] is False
+    assert any("drives_generation" in i and "false" in i for i in result["issues"])
+
+
+def test_image_field_drives_generation_true_fails(tmp_path, monkeypatch):
+    """image 字段 drives_generation=true（声称参与生成）必须失败（无真实上传链）。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    bad = _good_cfg("avatar-viral")
+    bad["input_fields"] = [
+        {"id": "photo", "label": "图片", "type": "image", "required": False,
+         "placeholder": "选择", "drives_generation": True},
+    ]
+    _write_cfg(tmp_path, "avatar-viral", bad)
+    result = run_generator_qa()
+    assert result["checks"]["template_config:avatar-viral"] is False
+    assert any("drives_generation" in i for i in result["issues"])
+
+
+def test_image_field_drives_generation_false_passes(tmp_path, monkeypatch):
+    """image 字段标 drives_generation=false（占位）通过该策略检查。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    ok = _good_cfg("avatar-viral")
+    ok["input_fields"] = [
+        {"id": "photo", "label": "参考图（占位）", "type": "image", "required": False,
+         "placeholder": "占位", "drives_generation": False},
+        {"id": "style", "label": "风格", "type": "text", "required": False, "placeholder": "p"},
+    ]
+    _write_cfg(tmp_path, "avatar-viral", ok)
+    result = run_generator_qa()
+    assert result["checks"]["template_config:avatar-viral"] is True
+
+
+def test_repo_image_fields_all_placeholder():
+    """仓库真实模板：所有 image 字段都已标 drives_generation:false（无 drives_generation 违规）。"""
+    result = run_generator_qa()
+    assert not any("drives_generation" in i for i in result["issues"]), result["issues"]
+
+
 # --- overlay Vue 用户可见文案诚实性（P0-1 收口）---
 
 def _write_vue(tmp_path: Path, template: str, page: str, body: str):
@@ -447,7 +504,8 @@ def test_repo_overlay_pages_no_video_or_upload_dishonesty():
 
 
 def _make_generated_project(miniapp_dir: Path, *, with_blueprint=True,
-                            blueprint_driven=True, token_residue=False):
+                            blueprint_driven=True, token_residue=False,
+                            with_input_fields=False, form_consumes_blueprint=True):
     src = miniapp_dir / "src"
     (src / "config").mkdir(parents=True, exist_ok=True)
     (src / "services").mkdir(parents=True, exist_ok=True)
@@ -457,6 +515,10 @@ def _make_generated_project(miniapp_dir: Path, *, with_blueprint=True,
               "generation_backend": "template_api", "real_generation": True,
               "fallback_mode": False, "result_identity": "头像",
               "boundary_note": "边界", "qa_expectation": "qa", "frontend_badge": "badge"}
+        if with_input_fields:
+            bp["input_fields"] = [
+                {"id": "style", "label": "风格", "type": "text", "required": False, "placeholder": "p"},
+            ]
         (src / "config" / "blueprint.json").write_text(
             json.dumps(bp), encoding="utf-8",
         )
@@ -464,8 +526,39 @@ def _make_generated_project(miniapp_dir: Path, *, with_blueprint=True,
     if blueprint_driven:
         svc = "export const GENERATION_MODE = 'mock'\nexport const IMAGE_GENERATION_PATH = '/api/generation/image'\nasync function callRealApi(){}\nexport function loadBlueprint(){}\nexport function generateFromBlueprint(){}\n" + svc
     (src / "services" / "generation.ts").write_text(svc, encoding="utf-8")
+    # form.vue：可选 blueprint-driven。
+    (src / "pages" / "form").mkdir(parents=True, exist_ok=True)
+    if form_consumes_blueprint:
+        form = ("<template><view></view></template>\n<script setup>\n"
+                "import { loadBlueprint } from '../../services/generation'\n"
+                "const bp = loadBlueprint(); const fields = bp.input_fields\n"
+                "const extra = {}\n</script>")
+    else:
+        form = "<template><textarea /></template>\n<script setup>const x=1</script>"
+    (src / "pages" / "form" / "form.vue").write_text(form, encoding="utf-8")
     if token_residue:
         (src / "config" / "leak.ts").write_text("export const X = '__APP_TEMPLATE__'", encoding="utf-8")
+
+
+def test_generated_form_blueprint_driven_passes(tmp_path):
+    """blueprint 有 input_fields + form 消费它 -> form_blueprint_driven 通过。"""
+    mini = tmp_path / "mini"
+    _make_generated_project(mini, with_input_fields=True, form_consumes_blueprint=True)
+    result = run_generator_qa(miniapp_dir=mini)
+    assert result["checks"]["form_blueprint_driven"] is True
+
+
+def test_generated_form_ignores_blueprint_fields_fails(tmp_path):
+    """blueprint 有 input_fields 但 form 不消费 -> 必须失败。"""
+    mini = tmp_path / "mini"
+    _make_generated_project(mini, with_input_fields=True, form_consumes_blueprint=False)
+    result = run_generator_qa(miniapp_dir=mini)
+    assert result["checks"]["form_blueprint_driven"] is False
+    assert not result["passed"]
+    assert any("未消费 blueprint.input_fields" in i for i in result["issues"])
+
+
+
 
 
 def test_generated_project_passes(tmp_path):

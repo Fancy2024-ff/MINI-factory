@@ -342,18 +342,27 @@ def _template_video_supported(cfg: dict) -> bool:
 
 
 def _check_input_upload_honesty(template: str, cfg: dict, issues: list[str]) -> bool:
-    """扫 image 类输入字段：宣称上传照片/图但未标 drives_generation:false 即不一致。
+    """image 输入字段策略：当前没有真实上传链，所有 image 字段必须 drives_generation=false。
 
-    当前真实链路是 prompt 驱动（不上传/不消费图片）。若某 image 字段文案让用户以为
-    「上传照片才能生成」，又没有诚实标注该字段不参与生成，就是冒充照片驱动生成，必须失败。
+    规则（P0-1 收口）：
+      - 任何 type=image 字段，drives_generation 必须显式为 False；缺失或为 True 都失败
+        （提示：当前上传链未接入，必须标占位或实现真实上传）。
+      - 另外，若文案宣称「上传照片驱动生成」，更要拦（与占位口径冲突）。
     """
     ok = True
     for f in cfg.get("input_fields") or []:
         if f.get("type") != "image":
             continue
+        # 核心策略：image 字段必须标占位（drives_generation=False）。
+        if f.get("drives_generation") is not False:
+            ok = False
+            issues.append(
+                f"{template} input_field {f.get('id', '?')} 是 image 但 drives_generation"
+                f"!=false（当前上传链未接入，必须标占位 drives_generation:false 或实现真实上传）"
+            )
+        # 文案宣称上传驱动（与占位口径冲突）也拦。
         text = f"{f.get('label', '')} {f.get('placeholder', '')}"
         claims_upload = any(frag in text for frag in _UPLOAD_CLAIM_FRAGMENTS)
-        # 真正参与生成（drives_generation 非 False）却宣称上传 = 冒充照片驱动。
         if claims_upload and f.get("drives_generation", True) is not False:
             ok = False
             issues.append(
@@ -497,6 +506,27 @@ def _check_generated_project(miniapp_dir: Path, checks: dict, issues: list[str])
     checks["generation_api_mode_path"] = api_mode_ok
     if not api_mode_ok:
         issues.append("generation.ts 缺少真实 API 链路路径（callRealApi/GENERATION_MODE/IMAGE_GENERATION_PATH）")
+
+    # form.vue 必须 blueprint-driven：blueprint 有 input_fields 时，表单必须消费
+    # loadBlueprint().input_fields（动态渲染），不能写死一个通用 textarea 而忽略字段事实源。
+    form_txt = _read(src / "pages" / "form" / "form.vue")
+    bp_has_fields = bool(bp_data.get("input_fields"))
+    if bp_has_fields:
+        form_ok = (
+            bool(form_txt)
+            and "loadBlueprint" in form_txt
+            and "input_fields" in form_txt
+            and "extra" in form_txt
+        )
+        checks["form_blueprint_driven"] = form_ok
+        if not form_ok:
+            issues.append(
+                "blueprint 含 input_fields，但 form.vue 未消费 blueprint.input_fields"
+                "（需 loadBlueprint + input_fields + extra，动态渲染表单）"
+            )
+    else:
+        # blueprint 无 input_fields（兜底文本型）：不强制，标记通过。
+        checks["form_blueprint_driven"] = True
 
 
 def run_generator_qa(miniapp_dir: Path | None = None) -> dict:

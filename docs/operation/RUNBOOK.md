@@ -153,3 +153,45 @@ worker 的 `pipeline.run` 在 payload 带 `queue_id` 时自动传 `--queue-id`�
 - **不包含微信上架闭环**，也不涉及 miniprogram-ci / 平台提审。
 - 同步执行（`execution_mode=sync`）仅作兼容/调试保留，不是主路径。
 - 后续项：PostgreSQL、分布式 worker、前端完整任务看板。
+
+## 微信真机验收：激励广告下载闭环（P0-2）
+
+下载高清图片/视频 = 商业变现闭环：用户预览结果后，必须**看完激励视频广告**才能解锁高清无水印下载。本章是真机可上线验收 checklist。
+
+### 一、配置
+
+- [ ] `.env` 设置 `REWARDED_AD_UNIT_ID=adunit-xxxxxxxx`（微信流量主后台创建的激励视频广告位）
+- [ ] `.env` 设置 `GENERATION_MODE=api`
+- [ ] `.env` 设置 `GENERATED_APP_API_BASE=https://你的域名`（https 绝对域名，且加入小程序后台 request 合法域名）
+- [ ] 微信小程序后台已开通流量主并创建**激励视频**广告位
+- [ ] 真机基础库版本支持 `wx.createRewardedVideoAd`（基础库 2.0.4+）
+- [ ] 保存相册需 `scope.writePhotosAlbum` 授权，确认权限弹窗可正常出现
+
+> 未配置 `REWARDED_AD_UNIT_ID` 时：生成的 `src/config/ads.ts` 为 `REWARDED_AD_ENABLED=false` + 空 id，结果页点击下载会诚实提示「开发者未配置广告位，暂不可下载高清结果」，**不解锁、不假装广告完成**。
+
+### 二、测试路径
+
+1. **图片成功**：生成 avatar → 点「看广告下载高清无水印头像」→ 广告完播 → 水印消失 → 图片保存相册成功。
+2. **图片广告中断**：点下载 → 中途关闭广告 → 水印仍在 → 不保存（提示「看完广告后才能下载」）。
+3. **广告未配置**：清空 `REWARDED_AD_UNIT_ID` 重新生成 → 点下载 → 提示未配置广告位 → 不解锁。
+4. **视频 URL**：若后端返回 `video_url` → 完播广告后 `saveVideoToPhotosAlbum` 存视频。
+5. **funny/blessing**：点导出 → 看广告 → 复制脚本/祝福卡文本（**不出现「下载视频」**，只导出预览）。
+
+### 三、漏斗埋点（可观测）
+
+下载漏斗事件写入本地 `growth-events`（console + storage，真机可用 vConsole 观察），完整完播链路顺序：
+
+```
+result_view → download_click → rewarded_ad_request → rewarded_ad_completed
+→ download_unlocked → watermark_removed → export_start → export_success
+```
+
+失败分支可区分：`rewarded_ad_not_configured` / `rewarded_ad_closed_early` /
+`rewarded_ad_load_error` / `rewarded_ad_show_error` / `save_permission_failed` / `export_failed`。
+
+### 四、Dashboard 验收
+
+DeliverablesPanel「商业闭环（下载变现）」卡片 + FactoryConsole「广告门槛」状态条：
+- mock 构建核心模板：广告门槛未配置 / 本地预览 / 不可高清下载（风险提示）。
+- api 构建 + 广告已配置：激励广告已配置 / 高清下载需完播广告 / 图片·视频·文本。
+- funny/blessing：导出预览脚本/卡片，不显示下载视频。

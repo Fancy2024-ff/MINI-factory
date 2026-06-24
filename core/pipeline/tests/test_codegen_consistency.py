@@ -146,6 +146,20 @@ def test_form_calls_generation_service(generated):
     assert "mockGenerate" in form, "form.vue 未调用 mockGenerate"
 
 
+def test_form_is_blueprint_driven(generated):
+    """form 页必须 blueprint-driven：消费 loadBlueprint().input_fields，
+    渲染 options、识别 drives_generation、把字段写入 extra。"""
+    miniapp_dir, _ = generated
+    form = (miniapp_dir / "src" / "pages" / "form" / "form.vue").read_text(encoding="utf-8")
+    assert "loadBlueprint" in form, "form.vue 未读取 blueprint"
+    assert "input_fields" in form, "form.vue 未消费 blueprint.input_fields"
+    assert "options" in form, "form.vue 未渲染 select 的 options"
+    assert "drives_generation" in form, "form.vue 未识别占位 image（drives_generation）"
+    assert "extra" in form, "form.vue 未把字段写入 extra"
+    # 占位图必须显式标注不参与生成。
+    assert "不参与生成" in form, "form.vue 占位 image 未标注『不参与生成』"
+
+
 def test_result_page_has_share_unlock_watermark(generated):
     """result 页必须含分享 CTA + 解锁钩子 + 水印逻辑。"""
     miniapp_dir, _ = generated
@@ -489,3 +503,155 @@ def test_video_template_growth_loop_fallback_preview(template, sample_app, sampl
     bp = json.loads((miniapp_dir / "src" / "config" / "blueprint.json").read_text(encoding="utf-8"))
     assert bp["growth_loop"]["capability_mode"] == "fallback_preview"
     assert gen_source["growth_loop_summary"]["capability_mode"] == "fallback_preview"
+
+
+# --- P0-2 激励广告门槛 + effective/template 双摘要（finding #6 收口）---
+
+def test_ads_config_injected(generated):
+    """生成项目必须含 src/config/ads.ts，且默认（未配置）为 enabled=false + 空 id（诚实）。"""
+    miniapp_dir, gen_source = generated
+    ads = miniapp_dir / "src" / "config" / "ads.ts"
+    assert ads.exists(), "缺少 src/config/ads.ts"
+    txt = ads.read_text(encoding="utf-8")
+    assert "REWARDED_AD_UNIT_ID" in txt
+    assert "REWARDED_AD_ENABLED" in txt
+    # 未配置 -> 空 id + false，运行时诚实提示，不假装广告可用。
+    assert "REWARDED_AD_UNIT_ID = ''" in txt
+    assert "'false' as string" in txt or "= false" in txt
+    assert gen_source.get("rewarded_ad_enabled") is False
+
+
+def test_ads_config_enabled_when_unit_id_set(sample_app, sample_prd, tmp_path, monkeypatch):
+    """配置 REWARDED_AD_UNIT_ID 时，ads.ts 注入真实广告位 + enabled=true。"""
+    from core.runtime import config
+    monkeypatch.setattr(config, "REWARDED_AD_UNIT_ID", "adunit-abc123", raising=False)
+    miniapp_dir, gen_source = generate_miniapp(sample_app, sample_prd, tmp_path, template="avatar-viral")
+    txt = (miniapp_dir / "src" / "config" / "ads.ts").read_text(encoding="utf-8")
+    assert "adunit-abc123" in txt
+    assert "'true' as string" in txt or "= true" in txt
+    assert gen_source.get("rewarded_ad_enabled") is True
+
+
+@pytest.mark.parametrize("template", CORE_RUNNABLE)
+def test_effective_summary_mock_downgrades_core(template, sample_app, sample_prd, tmp_path):
+    """mock 构建（默认）下核心模板：template summary=real，但 effective=fallback_preview + export/download false。"""
+    _, gen_source = generate_miniapp(sample_app, sample_prd, tmp_path, template=template)
+    assert gen_source["generation_mode"] == "mock"
+    tmpl = gen_source["template_growth_loop_summary"]
+    eff = gen_source["effective_growth_loop_summary"]
+    # 模板事实源仍 real（区分清楚）。
+    assert tmpl["capability_mode"] == "real"
+    assert tmpl["export_supported"] is True
+    # 运行时有效：mock 构建不显示 real / 高清导出。
+    assert eff["capability_mode"] == "fallback_preview"
+    assert eff["export_supported"] is False
+    assert eff["download_supported"] is False
+    assert eff.get("effective_note")
+    # codegen_report 也带 effective 摘要。
+    assert gen_source["codegen_report"]["effective_growth_loop_summary"]["capability_mode"] == "fallback_preview"
+
+
+@pytest.mark.parametrize("template", CORE_RUNNABLE)
+def test_effective_summary_api_keeps_real(template, sample_app, sample_prd, tmp_path, monkeypatch):
+    """api 构建（https base）下核心模板 effective 保持 real（不误降级）。"""
+    from core.runtime import config
+    monkeypatch.setattr(config, "GENERATION_MODE", "api")
+    monkeypatch.setattr(config, "GENERATED_APP_API_BASE", "https://api.example.com")
+    _, gen_source = generate_miniapp(sample_app, sample_prd, tmp_path, template=template)
+    assert gen_source["generation_mode"] == "api"
+    eff = gen_source["effective_growth_loop_summary"]
+    assert eff["capability_mode"] == "real"
+    assert eff["export_supported"] is True
+
+
+def test_blueprint_carries_download_gate(sample_app, sample_prd, tmp_path):
+    """生成项目 blueprint.json 必须保留 growth_loop.download_gate（运行时广告门槛事实源）。"""
+    miniapp_dir, _ = generate_miniapp(sample_app, sample_prd, tmp_path, template="avatar-viral")
+    bp = json.loads((miniapp_dir / "src" / "config" / "blueprint.json").read_text(encoding="utf-8"))
+    gate = bp["growth_loop"].get("download_gate")
+    assert gate is not None
+    assert gate["gate_type"] == "rewarded_ad"
+    assert "remove_watermark" in gate["required_for"]
+
+
+def test_result_vue_uses_rewarded_ad_gate(generated):
+    """result.vue 下载必须经激励广告门槛（requestRewardedAdUnlock），不是直接下载。"""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "pages" / "result" / "result.vue").read_text(encoding="utf-8")
+    assert "requestRewardedAdUnlock" in txt
+    assert "isRewardedAdRequired" in txt
+    # 真实保存路径：图片 + 视频 + 文本。
+    assert "saveImageToPhotosAlbum" in txt
+    assert "saveVideoToPhotosAlbum" in txt
+    assert "setClipboardData" in txt
+
+
+def test_generation_ts_exposes_ad_gate_api(generated):
+    """generation.ts 暴露广告门槛 API（requestRewardedAdUnlock/markAdUnlocked/isRewardedAdRequired）。"""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "services" / "generation.ts").read_text(encoding="utf-8")
+    for fn in ("requestRewardedAdUnlock", "markAdUnlocked", "isRewardedAdRequired", "unlockAfterRewardedAd"):
+        assert fn in txt, f"generation.ts 缺少 {fn}"
+    # remote_video 导出分类。
+    assert "remote_video" in txt
+
+
+# --- P0-2 激励广告埋点 + 商业闭环摘要 ---
+
+def test_analytics_service_copied(generated):
+    """生成项目必须含 src/services/analytics.ts（下载漏斗埋点）。"""
+    miniapp_dir, _ = generated
+    a = miniapp_dir / "src" / "services" / "analytics.ts"
+    assert a.exists(), "缺少 src/services/analytics.ts"
+    txt = a.read_text(encoding="utf-8")
+    assert "trackGrowthEvent" in txt
+    assert "getGrowthEvents" in txt  # 单测可读事件队列
+
+
+def test_result_vue_tracks_funnel_events(generated):
+    """result.vue 必须埋下载漏斗事件（result_view / download_click / export_*）。"""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "pages" / "result" / "result.vue").read_text(encoding="utf-8")
+    assert "trackGrowthEvent" in txt
+    assert "result_view" in txt
+    assert "download_click" in txt
+    assert "export_start" in txt
+
+
+def test_generation_ts_tracks_ad_funnel(generated):
+    """generation.ts 的广告流程必须埋点（request / completed / not_configured 等）。"""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "services" / "generation.ts").read_text(encoding="utf-8")
+    assert "trackGrowthEvent" in txt
+    assert "rewarded_ad_request" in txt
+    assert "rewarded_ad_completed" in txt
+    assert "download_unlocked" in txt
+
+
+def test_gen_source_has_download_gate_summary(generated):
+    """generator-source.json 摘要含 download_gate 字段（dashboard 商业闭环消费）。"""
+    _, gen_source = generated
+    summ = gen_source["growth_loop_summary"]
+    assert "download_gate_type" in summ
+    assert "download_gate_required_for" in summ
+    assert "rewarded_ad_enabled" in gen_source
+
+
+@pytest.mark.parametrize("template", CORE_RUNNABLE)
+def test_core_template_gate_requires_download(template, sample_app, sample_prd, tmp_path):
+    """avatar/sticker/pet-talk 的 download_gate.required_for 含 download/remove_watermark。"""
+    miniapp_dir, _ = generate_miniapp(sample_app, sample_prd, tmp_path, template=template)
+    bp = json.loads((miniapp_dir / "src" / "config" / "blueprint.json").read_text(encoding="utf-8"))
+    gate = bp["growth_loop"]["download_gate"]
+    assert "download" in gate["required_for"]
+    assert "remove_watermark" in gate["required_for"]
+
+
+@pytest.mark.parametrize("template", HONEST_PREVIEW)
+def test_video_template_gate_export_only(template, sample_app, sample_prd, tmp_path):
+    """funny/blessing 的 download_gate.required_for 只能是 export，不含 download。"""
+    miniapp_dir, _ = generate_miniapp(sample_app, sample_prd, tmp_path, template=template)
+    bp = json.loads((miniapp_dir / "src" / "config" / "blueprint.json").read_text(encoding="utf-8"))
+    gate = bp["growth_loop"]["download_gate"]
+    assert "download" not in gate["required_for"]
+    assert gate["required_for"] == ["export"]

@@ -267,6 +267,56 @@ def _validate_growth_loop(template: str, cfg: dict) -> None:
             f"{template}/template.json real_generation=false 但 growth_loop.capability_mode={mode!r}，"
             f"诚实预览型模板必须为 fallback_preview（不得冒充真实生成）"
         )
+    _validate_download_gate(template, gl)
+
+
+# download_gate（激励广告下载门槛）允许值。
+DOWNLOAD_GATE_TYPES = {"rewarded_ad", "none"}
+DOWNLOAD_GATE_REQUIRED_KEYS = (
+    "enabled", "gate_type", "required_for",
+    "gate_label", "reward_label", "unavailable_hint", "close_hint",
+)
+DOWNLOAD_GATE_REQUIRED_FOR_VALUES = {"download", "remove_watermark", "export"}
+# 视频边界型模板：gate 文案不得宣称「下载/生成视频」，只能导出脚本/卡片预览。
+_VIDEO_BOUNDARY_TEMPLATES = {"funny-video-viral", "blessing-video-viral"}
+_FORBIDDEN_VIDEO_GATE_PHRASES = ("下载视频", "下载祝福视频", "生成视频", "真实视频", "视频已生成")
+
+
+def _validate_download_gate(template: str, gl: dict) -> None:
+    """校验 growth_loop.download_gate（存在才校验；它是 P0-2 广告门槛事实源）。
+
+    - 结构完整、gate_type / required_for 合法；
+    - 视频边界型（funny/blessing）的 gate 文案不得宣称下载/生成视频（不伪装真实视频）。
+    """
+    gate = gl.get("download_gate")
+    if gate is None:
+        return  # download_gate 为可选；缺省视为无广告门槛
+    if not isinstance(gate, dict):
+        raise BlueprintError(f"{template}/template.json growth_loop.download_gate 必须是对象")
+    miss = [k for k in DOWNLOAD_GATE_REQUIRED_KEYS if k not in gate]
+    if miss:
+        raise BlueprintError(
+            f"{template}/template.json download_gate 缺少键: {', '.join(miss)}"
+        )
+    if gate.get("gate_type") not in DOWNLOAD_GATE_TYPES:
+        raise BlueprintError(
+            f"{template}/template.json download_gate.gate_type={gate.get('gate_type')!r} "
+            f"不在 {sorted(DOWNLOAD_GATE_TYPES)}"
+        )
+    rf = gate.get("required_for")
+    if not isinstance(rf, list) or any(x not in DOWNLOAD_GATE_REQUIRED_FOR_VALUES for x in rf):
+        raise BlueprintError(
+            f"{template}/template.json download_gate.required_for={rf!r} "
+            f"只能取 {sorted(DOWNLOAD_GATE_REQUIRED_FOR_VALUES)}"
+        )
+    if template in _VIDEO_BOUNDARY_TEMPLATES:
+        blob = f"{gate.get('gate_label', '')} {gate.get('reward_label', '')}"
+        hit = [p for p in _FORBIDDEN_VIDEO_GATE_PHRASES if p in blob]
+        if hit:
+            raise BlueprintError(
+                f"{template}/template.json download_gate 文案不得宣称视频下载/生成: {hit}"
+                f"（视频边界型只能导出脚本/卡片预览）"
+            )
 
 
 def _fallback_blueprint(template: str, app: dict, prd_json: dict) -> dict:

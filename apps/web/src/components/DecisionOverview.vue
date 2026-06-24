@@ -27,11 +27,19 @@ const growthLoopSummary = computed<Record<string, any>>(() => {
   const gs: any = props.job?.artifacts?.['generator-source.json']
   return gs?.growth_loop_summary || gs?.codegen_report || {}
 })
+// 运行时有效摘要：mock 构建下核心模板折算为 fallback_preview（finding #6）。
+const effectiveSummary = computed<Record<string, any>>(() => {
+  const gs: any = props.job?.artifacts?.['generator-source.json']
+  return gs?.effective_growth_loop_summary || gs?.codegen_report?.effective_growth_loop_summary || {}
+})
 const hasGrowthLoop = computed(() =>
   !!growthLoopSummary.value?.growth_loop_present || !!Object.keys(growthLoop.value).length,
 )
 const isPreviewMode = computed(() => {
-  const mode = growthLoop.value?.capability_mode || growthLoopSummary.value?.capability_mode
+  // 优先看运行时有效能力：mock 构建下即便模板事实源 real，也按 fallback_preview 显示。
+  const mode = effectiveSummary.value?.capability_mode
+    || growthLoop.value?.capability_mode
+    || growthLoopSummary.value?.capability_mode
   return mode === 'fallback_preview'
 })
 

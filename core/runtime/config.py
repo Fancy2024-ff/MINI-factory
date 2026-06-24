@@ -43,6 +43,11 @@ IMAGE_GENERATION_TIMEOUT_SECONDS = int(os.getenv("IMAGE_GENERATION_TIMEOUT_SECON
 GENERATION_MODE = os.getenv("GENERATION_MODE", "mock")
 GENERATED_APP_API_BASE = os.getenv("GENERATED_APP_API_BASE", "")
 
+# 激励广告（rewarded video ad）配置：下载高清/去水印结果前的变现门槛。
+# codegen 注入进生成小程序的 src/config/ads.ts。未配置时门槛禁用、运行时诚实提示，
+# 不硬编码业务真实广告位。adUnitId 形如 adunit-xxxxxxxx（微信流量主后台创建）。
+REWARDED_AD_UNIT_ID = os.getenv("REWARDED_AD_UNIT_ID", "")
+
 # NOTE: 不再有 GENERATOR_URL / GENERATOR_API_KEY。
 # miniapp 生成的唯一执行真源是 Python core/generator/codegen.py，主链路不调用
 # Node generator HTTP 服务（该服务已从正式部署移除，仅作 vitest/Node 兼容工具）。

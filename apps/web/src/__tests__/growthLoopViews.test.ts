@@ -222,3 +222,185 @@ describe('DeliverablesPanel propagation productization', () => {
     expect(status.find('.prop-badge').text()).toContain('待 QA 验证')
   })
 })
+
+// --- P0-2 finding #6：mock 构建下 dashboard 读 effective summary，不显示 real / 高清导出 ---
+
+// mock 构建：模板事实源 real，但 effective 已折算为 fallback_preview + export off。
+function mockBuildJob(): JobDetail {
+  return {
+    id: 'job-mock-0003',
+    path: '/tmp/job3',
+    artifacts: {
+      'generator-source.json': {
+        preview_type: 'avatar',
+        template_status: 'core_runnable',
+        real_generation: true,
+        fallback_mode: false,
+        generation_mode: 'mock',
+        // 模板事实源摘要：real（区分清楚）。
+        template_growth_loop_summary: {
+          growth_loop_present: true, has_share_cta: true, has_unlock: true,
+          has_watermark: true, remove_watermark_supported: true, brand_exposure: true,
+          export_supported: true, capability_mode: 'real',
+        },
+        growth_loop_summary: {
+          growth_loop_present: true, has_share_cta: true, has_unlock: true,
+          has_watermark: true, remove_watermark_supported: true, brand_exposure: true,
+          export_supported: true, capability_mode: 'real',
+        },
+        // 运行时有效摘要：mock 构建 -> fallback_preview + export off。
+        effective_growth_loop_summary: {
+          growth_loop_present: true, has_share_cta: true, has_unlock: true,
+          has_watermark: true, remove_watermark_supported: true, brand_exposure: true,
+          export_supported: false, capability_mode: 'fallback_preview',
+          effective_note: '当前构建未配置真实生成 API，运行时展示本地预览（非真实高清下载）',
+        },
+        growth_loop: { capability_mode: 'real', share_title: 't', share_copy: 'c', unlock_hint: 'u' },
+      },
+    },
+  }
+}
+
+describe('dashboard effective summary (finding #6: mock build not shown as real)', () => {
+  it('FactoryConsole shows preview capability + export 已预留, not real', () => {
+    const wrapper = mount(FactoryConsole, {
+      props: { job: mockBuildJob(), running: false, logs: [], runtimePipelineSteps: [], selectedStepId: '' },
+    })
+    const cap = wrapper.find('[data-testid="gl-capability"]')
+    expect(cap.text()).toContain('fallback_preview')
+    expect(cap.text()).not.toContain('real · 真实生成')
+    // 导出摘要显示「已预留」（effective export off），不显示「支持」。
+    expect(wrapper.find('[data-testid="gl-export"]').text()).toContain('已预留')
+  })
+
+  it('DecisionOverview marks preview mode for mock build even though template is real', () => {
+    const wrapper = mount(DecisionOverview, { props: { job: mockBuildJob() } })
+    const card = wrapper.find('[data-testid="growth-loop-card"]')
+    expect(card.text()).toContain('fallback_preview')
+  })
+
+  it('api build keeps real (control case)', () => {
+    const job = mockBuildJob()
+    job.artifacts['generator-source.json'].generation_mode = 'api'
+    job.artifacts['generator-source.json'].effective_growth_loop_summary = {
+      growth_loop_present: true, has_share_cta: true, has_unlock: true,
+      has_watermark: true, remove_watermark_supported: true, brand_exposure: true,
+      export_supported: true, capability_mode: 'real', effective_note: '',
+    }
+    const wrapper = mount(FactoryConsole, {
+      props: { job, running: false, logs: [], runtimePipelineSteps: [], selectedStepId: '' },
+    })
+    expect(wrapper.find('[data-testid="gl-capability"]').text()).toContain('real · 真实生成')
+  })
+})
+
+// --- P0-2 商业闭环卡片（DeliverablesPanel commercial-loop）---
+
+// mock 构建 + 核心模板（avatar）：广告门槛未生效、仅本地预览、不可高清下载。
+function commercialMockJob(): JobDetail {
+  return {
+    id: 'job-comm-mock',
+    path: '/tmp/cm',
+    artifacts: {
+      'generator-source.json': {
+        generation_mode: 'mock',
+        real_generation: true,
+        rewarded_ad_enabled: false,
+        template_growth_loop_summary: {
+          growth_loop_present: true, capability_mode: 'real', export_supported: true,
+          download_gate_type: 'rewarded_ad', download_gate_required_for: ['download', 'remove_watermark'],
+        },
+        effective_growth_loop_summary: {
+          growth_loop_present: true, capability_mode: 'fallback_preview', export_supported: false,
+          effective_note: '当前构建未配置真实生成 API，运行时展示本地预览（非真实高清下载）',
+        },
+      },
+    },
+  }
+}
+
+// api 构建 + 广告已配置：激励广告已配置、高清下载需完播广告。
+function commercialApiJob(): JobDetail {
+  return {
+    id: 'job-comm-api',
+    path: '/tmp/ca',
+    artifacts: {
+      'generator-source.json': {
+        generation_mode: 'api',
+        real_generation: true,
+        rewarded_ad_enabled: true,
+        template_growth_loop_summary: {
+          growth_loop_present: true, capability_mode: 'real', export_supported: true,
+          download_gate_type: 'rewarded_ad', download_gate_required_for: ['download', 'remove_watermark'],
+        },
+        effective_growth_loop_summary: {
+          growth_loop_present: true, capability_mode: 'real', export_supported: true, effective_note: '',
+        },
+      },
+    },
+  }
+}
+
+// funny 视频边界型：导出预览脚本，不下载视频。
+function commercialFunnyJob(): JobDetail {
+  return {
+    id: 'job-comm-funny',
+    path: '/tmp/cf',
+    artifacts: {
+      'generator-source.json': {
+        generation_mode: 'api',
+        real_generation: false,
+        rewarded_ad_enabled: true,
+        template_growth_loop_summary: {
+          growth_loop_present: true, capability_mode: 'fallback_preview', export_supported: true,
+          download_gate_type: 'rewarded_ad', download_gate_required_for: ['export'],
+        },
+        effective_growth_loop_summary: {
+          growth_loop_present: true, capability_mode: 'fallback_preview', export_supported: true, effective_note: '',
+        },
+      },
+    },
+  }
+}
+
+describe('DeliverablesPanel commercial-loop card (P0-2)', () => {
+  it('mock build core template: 广告门槛未配置 + 本地预览 + 不可高清下载 + 风险提示', () => {
+    const wrapper = mount(DeliverablesPanel, { props: { job: commercialMockJob() } })
+    const card = wrapper.find('[data-testid="commercial-loop"]')
+    expect(card.exists()).toBe(true)
+    expect(card.text()).toContain('未配置')
+    expect(card.text()).toContain('本地预览')
+    expect(card.text()).toContain('不可变现')
+    expect(card.text()).toContain('mock 构建')
+  })
+
+  it('api build + ad configured: 激励广告已配置 + 图片/视频/文本下载', () => {
+    const wrapper = mount(DeliverablesPanel, { props: { job: commercialApiJob() } })
+    const card = wrapper.find('[data-testid="commercial-loop"]')
+    expect(card.text()).toContain('已配置')
+    expect(card.text()).toContain('激励广告')
+    expect(card.text()).toContain('图片 / 视频 / 文本')
+  })
+
+  it('funny/blessing: 导出预览, NOT 下载视频', () => {
+    const wrapper = mount(DeliverablesPanel, { props: { job: commercialFunnyJob() } })
+    const card = wrapper.find('[data-testid="commercial-loop"]')
+    expect(card.text()).toContain('文本预览导出')
+    expect(card.text()).not.toContain('下载视频')
+    expect(card.text()).toContain('只导出脚本/卡片预览')
+  })
+
+  it('FactoryConsole shows 广告门槛 已配置 for api+ad job', () => {
+    const wrapper = mount(FactoryConsole, {
+      props: { job: commercialApiJob(), running: false, logs: [], runtimePipelineSteps: [], selectedStepId: '' },
+    })
+    expect(wrapper.find('[data-testid="gl-ad-gate"]').text()).toContain('已配置')
+  })
+
+  it('FactoryConsole shows 广告门槛 未配置 for mock job', () => {
+    const wrapper = mount(FactoryConsole, {
+      props: { job: commercialMockJob(), running: false, logs: [], runtimePipelineSteps: [], selectedStepId: '' },
+    })
+    expect(wrapper.find('[data-testid="gl-ad-gate"]').text()).toContain('未配置')
+  })
+})

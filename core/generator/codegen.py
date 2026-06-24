@@ -37,6 +37,9 @@ TOKEN_APP_PREVIEW_TYPE = "__APP_PREVIEW_TYPE__"
 # 生成产物前端运行时配置 token（注入 src/config/api.ts）
 TOKEN_API_BASE = "__API_BASE__"
 TOKEN_GENERATION_MODE = "__GENERATION_MODE__"
+# 激励广告配置 token（注入 src/config/ads.ts）
+TOKEN_REWARDED_AD_UNIT_ID = "__REWARDED_AD_UNIT_ID__"
+TOKEN_REWARDED_AD_ENABLED = "__REWARDED_AD_ENABLED__"
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "src" / "templates"
 
@@ -48,6 +51,7 @@ def _growth_loop_summary(blueprint: dict) -> dict:
     布尔/枚举字段判断「这套生成的小程序带不带传播闭环」，无需解析整段 growth_loop。
     """
     gl = blueprint.get("growth_loop") or {}
+    gate = gl.get("download_gate") or {}
     return {
         "growth_loop_present": bool(gl),
         "has_share_cta": bool(gl.get("has_share_cta")),
@@ -60,7 +64,38 @@ def _growth_loop_summary(blueprint: dict) -> dict:
         "download_supported": bool(gl.get("download_supported")),
         "export_supported": bool(gl.get("export_supported")),
         "capability_mode": gl.get("capability_mode", ""),
+        # 激励广告下载门槛摘要（dashboard 商业闭环卡片消费）。
+        "download_gate_enabled": bool(gate.get("enabled")),
+        "download_gate_type": gate.get("gate_type", "none"),
+        "download_gate_required_for": gate.get("required_for", []),
     }
+
+
+def _effective_growth_loop_summary(blueprint: dict, generation_mode: str) -> dict:
+    """运行时「有效」传播闭环摘要：把「模板事实源能力」折算成「本次构建运行时实际能力」。
+
+    模板事实源（template summary）说的是「这套模板支不支持真实生成」；但当构建运行模式是
+    mock（未配置真实 API）时，核心模板（real_generation=true）的本次产物其实只是本地预览，
+    并不会产出真实高清图 / 可下载结果。Dashboard 若直接读 template summary 会显示
+    「real · 真实生成 / 支持高清导出」，误导老板。这里按运行模式收口：
+
+    - generation_mode != 'api' 且 real_generation=true 的核心模板：
+      effective capability_mode=fallback_preview、export/download=false、note 说明本地预览；
+    - 其余（api 模式真实可跑 / 模板本就是 fallback_preview）：直接沿用 template summary。
+    """
+    summary = _growth_loop_summary(blueprint)
+    is_core_real = bool(blueprint.get("real_generation"))
+    if generation_mode != "api" and is_core_real:
+        summary = {
+            **summary,
+            "capability_mode": "fallback_preview",
+            "export_supported": False,
+            "download_supported": False,
+            "effective_note": "当前构建未配置真实生成 API，运行时展示本地预览（非真实高清下载）",
+        }
+    else:
+        summary = {**summary, "effective_note": ""}
+    return summary
 
 
 
@@ -77,6 +112,19 @@ def _resolve_generation_runtime() -> tuple[str, str]:
     if mode == "api" and api_base.startswith("https://"):
         return "api", api_base
     return "mock", ""
+
+
+def _resolve_rewarded_ad() -> tuple[str, bool]:
+    """决定生成产物前端的 (rewarded_ad_unit_id, enabled)。
+
+    诚实收口：只有配置了非空 ad unit id 才 enabled=true；否则空 id + false，
+    运行时显式提示「开发者未配置广告位」，绝不假装广告可用 / 已完成。
+    """
+    from core.runtime import config
+
+    ad_unit_id = (getattr(config, "REWARDED_AD_UNIT_ID", "") or "").strip()
+    enabled = bool(ad_unit_id)
+    return ad_unit_id, enabled
 
 
 
@@ -146,8 +194,10 @@ def generate_miniapp(app: dict, prd_json: dict, output_dir: Path, template: str 
     gen_source["fallback_mode"] = blueprint.get("fallback_mode", False)
     gen_source["boundary_note"] = blueprint.get("boundary_note", "")
     # 传播闭环摘要（事实源 template.json.growth_loop -> blueprint），写入 gen_source。
+    # template_growth_loop_summary = 模板事实源能力；effective 摘要在 gen_mode 确定后补写。
     gen_source["growth_loop"] = blueprint.get("growth_loop", {})
     gen_source["growth_loop_summary"] = _growth_loop_summary(blueprint)
+    gen_source["template_growth_loop_summary"] = _growth_loop_summary(blueprint)
 
     # --- 2. token 注入 ---
     tokens = {
@@ -183,12 +233,26 @@ def generate_miniapp(app: dict, prd_json: dict, output_dir: Path, template: str 
     # 安全收口在 _resolve_generation_runtime：非 https 绝对域名一律回退 mock。
     gen_mode, api_base = _resolve_generation_runtime()
     gen_source["generation_mode"] = gen_mode
+    # 运行时「有效」传播闭环摘要：按构建运行模式折算（mock + 核心模板 -> fallback_preview）。
+    # Dashboard 优先读它，避免在 mock 构建下显示「real · 真实生成 / 支持高清导出」。
+    gen_source["effective_growth_loop_summary"] = _effective_growth_loop_summary(blueprint, gen_mode)
     api_cfg = src_dir / "config" / "api.ts"
     if api_cfg.exists():
         cfg_text = api_cfg.read_text(encoding="utf-8")
         cfg_text = cfg_text.replace(TOKEN_API_BASE, api_base)
         cfg_text = cfg_text.replace(TOKEN_GENERATION_MODE, gen_mode)
         _write(api_cfg, cfg_text)
+
+    # --- 2d. 注入激励广告配置 src/config/ads.ts（rewarded ad unit id + enabled）---
+    # 未配置 ad unit id 时 enabled=false + 空 id：运行时诚实提示「未配置广告位」，不假装。
+    ad_unit_id, ad_enabled = _resolve_rewarded_ad()
+    gen_source["rewarded_ad_enabled"] = ad_enabled
+    ads_cfg = src_dir / "config" / "ads.ts"
+    if ads_cfg.exists():
+        ads_text = ads_cfg.read_text(encoding="utf-8")
+        ads_text = ads_text.replace(TOKEN_REWARDED_AD_UNIT_ID, ad_unit_id)
+        ads_text = ads_text.replace(TOKEN_REWARDED_AD_ENABLED, "true" if ad_enabled else "false")
+        _write(ads_cfg, ads_text)
 
     # --- 3a. package.json：deps/scripts 来自模板，仅覆盖 App 元信息 ---
     pkg = json.loads((base_template / "package.json").read_text(encoding="utf-8-sig"))
@@ -259,6 +323,9 @@ def generate_miniapp(app: dict, prd_json: dict, output_dir: Path, template: str 
         "blueprint_is_fallback": blueprint.get("is_fallback", False),
         # 传播闭环摘要（与 blueprint.json / 前端 / Growth QA 口径一致）。
         **_growth_loop_summary(blueprint),
+        # 运行时有效摘要（按 generation_mode 折算）：Dashboard 优先读，mock 构建不显示 real。
+        "effective_growth_loop_summary": _effective_growth_loop_summary(blueprint, gen_mode),
+        "rewarded_ad_enabled": gen_source.get("rewarded_ad_enabled", False),
         "generated_files_count": gen_source["generated_files_count"],
         "pages": registered_pages,
         "token_injection": {

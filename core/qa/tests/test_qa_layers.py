@@ -47,8 +47,26 @@ def _make_miniapp_with_propagation(miniapp_dir: Path):
                 "remove_watermark_supported": True, "brand_exposure": True, "brand_label": "MiniForge",
                 "download_supported": True, "export_supported": True, "export_label": "下载高清头像",
                 "capability_mode": "real", "capability_note": "真实生成",
+                "download_gate": {
+                    "enabled": True, "gate_type": "rewarded_ad", "ad_unit_id": "",
+                    "required_for": ["download", "remove_watermark"],
+                    "gate_label": "看广告下载高清无水印头像", "reward_label": "已解锁高清下载",
+                    "unavailable_hint": "开发者未配置广告位，暂不可下载高清结果",
+                    "close_hint": "看完广告后才能下载/导出高清结果",
+                },
             },
         }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    # ads.ts + analytics.ts：广告闭环配置 + 埋点（QA 商业化检查依赖）。
+    (src / "config" / "ads.ts").write_text(
+        "export const REWARDED_AD_UNIT_ID = ''\n"
+        "export const REWARDED_AD_ENABLED: boolean = false\n",
+        encoding="utf-8",
+    )
+    (src / "services" / "analytics.ts").write_text(
+        "export function trackGrowthEvent(name: string, payload: any = {}) { return { name, ...payload } }\n"
+        "export function growthContextFromResult(r: any) { return { result_id: r && r.id } }\n",
         encoding="utf-8",
     )
     (src / "services" / "generation.ts").write_text(
@@ -61,6 +79,10 @@ def _make_miniapp_with_propagation(miniapp_dir: Path):
         "async function callRealApi(): Promise<GeneratedResult | null> {\n"
         "  if (GENERATION_MODE !== 'api') return null\n"
         "  void IMAGE_GENERATION_PATH; void TEMPLATE_GENERATION_PATH; return null\n}\n"
+        "export function isRewardedAdRequired(r: any) { return !!(r && r.downloadGate && !r.adUnlocked) }\n"
+        "export function markAdUnlocked(id: string) { return null }\n"
+        "export function classifyExportTarget(r: any) { return { kind: 'remote_image' } }\n"
+        "export async function requestRewardedAdUnlock(id: string) { return { ok: false } }\n"
         "export async function mockGenerate(input: any): Promise<GeneratedResult> {\n"
         "  const real = await callRealApi(); if (real) return real\n"
         "  switch (SELECTED_TEMPLATE) { default: return { id: 'x', template: SELECTED_TEMPLATE, "
@@ -83,7 +105,9 @@ def _make_miniapp_with_propagation(miniapp_dir: Path):
         "<text>watermark 水印 邀请好友 品牌露出 导出 当前能力</text>"
         "<text>{{ result.removeWatermarkSupported }} {{ result.brandExposure }} "
         "{{ result.exportSupported }} {{ result.capabilityMode }}</text></template>"
-        "<script setup lang=\"ts\">function u(){}</script>",
+        "<script setup lang=\"ts\">import { requestRewardedAdUnlock, isRewardedAdRequired, classifyExportTarget } from '../../services/generation'\n"
+        "import { trackGrowthEvent } from '../../services/analytics'\n"
+        "async function u(){ if (isRewardedAdRequired(null)) await requestRewardedAdUnlock('x'); trackGrowthEvent('download_click'); uni.saveImageToPhotosAlbum({}); uni.saveVideoToPhotosAlbum({}); uni.setClipboardData({}) }</script>",
         encoding="utf-8",
     )
 
@@ -329,4 +353,73 @@ def test_growth_qa_core_template_downgraded_fails(tmp_path):
 
     result = run_growth_qa(out, miniapp_dir=mini)
     assert result["checks"]["core_template_not_downgraded"] is False
+    assert not result["passed"]
+
+
+# --- P0-2 激励广告下载闭环 Growth QA 检查 ---
+
+def _gen_miniapp_with_source(tmp_path, template):
+    """生成 miniapp 并把 generator-source.json 落到 out（供 effective summary 检查）。"""
+    out = tmp_path / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    _make_growth_artifacts(out)
+    gd = tmp_path / ("genx_" + template)
+    gd.mkdir(parents=True, exist_ok=True)
+    miniapp_dir, gen_source = generate_miniapp(_GL_APP, _GL_PRD, gd, template=template)
+    (out / "generator-source.json").write_text(
+        json.dumps(gen_source, ensure_ascii=False), encoding="utf-8"
+    )
+    return out, miniapp_dir
+
+
+def test_growth_qa_rewarded_ad_loop_checks_pass(tmp_path):
+    """avatar 真接入：广告闭环全部 checks 通过。"""
+    out, mini = _gen_miniapp_with_source(tmp_path, "avatar-viral")
+    result = run_growth_qa(out, miniapp_dir=mini)
+    c = result["checks"]
+    assert c["rewarded_ad_gate_in_blueprint"] is True
+    assert c["rewarded_ad_config_present"] is True
+    assert c["result_uses_rewarded_ad_unlock"] is True
+    assert c["result_blocks_download_before_ad"] is True
+    assert c["result_tracks_growth_events"] is True
+    assert c["export_supports_remote_image"] is True
+    assert c["export_supports_remote_video"] is True
+    assert c["export_supports_text_preview"] is True
+    assert c["no_video_claim_for_preview_templates"] is True
+    # mock 构建：effective 必须 fallback_preview。
+    assert c["mock_runtime_effective_preview_visible"] is True
+    assert result["passed"], result["issues"]
+
+
+def test_growth_qa_video_template_gate_no_video_claim(tmp_path):
+    """funny/blessing：gate 文案不提视频下载，no_video_claim_for_preview_templates=True。"""
+    for tpl in ("funny-video-viral", "blessing-video-viral"):
+        out, mini = _gen_miniapp_with_source(tmp_path / tpl, tpl)
+        result = run_growth_qa(out, miniapp_dir=mini)
+        assert result["checks"]["no_video_claim_for_preview_templates"] is True
+
+
+def test_growth_qa_video_gate_with_download_fails(tmp_path):
+    """篡改 funny gate.required_for 含 download -> no_video_claim 失败、不通过。"""
+    out, mini = _gen_miniapp_with_source(tmp_path, "funny-video-viral")
+    bp_path = mini / "src" / "config" / "blueprint.json"
+    bp = json.loads(bp_path.read_text(encoding="utf-8"))
+    bp["growth_loop"]["download_gate"]["required_for"] = ["download", "export"]
+    bp_path.write_text(json.dumps(bp, ensure_ascii=False), encoding="utf-8")
+
+    result = run_growth_qa(out, miniapp_dir=mini)
+    assert result["checks"]["no_video_claim_for_preview_templates"] is False
+    assert not result["passed"]
+
+
+def test_growth_qa_fails_when_result_skips_ad_gate(tmp_path):
+    """result.vue 退化为直接下载（无 requestRewardedAdUnlock）-> 广告门槛 check 失败。"""
+    out, mini = _gen_miniapp_with_source(tmp_path, "avatar-viral")
+    rv = mini / "src" / "pages" / "result" / "result.vue"
+    # 退化：移除广告解锁调用，直接保存。
+    txt = rv.read_text(encoding="utf-8").replace("requestRewardedAdUnlock", "directDownloadNoAd")
+    rv.write_text(txt, encoding="utf-8")
+
+    result = run_growth_qa(out, miniapp_dir=mini)
+    assert result["checks"]["result_uses_rewarded_ad_unlock"] is False
     assert not result["passed"]

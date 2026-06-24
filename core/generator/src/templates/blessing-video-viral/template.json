@@ -21,7 +21,7 @@
     "share_copy": "当前为祝福卡预览，真实祝福视频生成是后续能力",
     "has_unlock": true,
     "unlock_type": "preview_share_unlock",
-    "unlock_hint": "分享祝福卡后解锁高清卡片和去水印导出",
+    "unlock_hint": "看完广告后导出祝福卡预览（非祝福视频）",
     "has_watermark": true,
     "watermark_label": "MiniForge 祝福卡水印",
     "remove_watermark_supported": true,
@@ -33,7 +33,19 @@
     "export_label": "导出祝福卡",
     "capability_mode": "fallback_preview",
     "capability_note": "当前是 honest fallback / preview mode，分享/导出的是祝福贺卡预览，不是真实祝福视频生成。",
-    "result_layer_logic": "结果页展示祝福贺卡预览 + 醒目 preview mode 提示，分享/解锁/去水印/导出均只针对祝福卡片，绝不宣称祝福视频已生成。"
+    "result_layer_logic": "结果页展示祝福贺卡预览 + 醒目 preview mode 提示，分享/解锁/去水印/导出均只针对祝福卡片，绝不宣称祝福视频已生成。",
+    "download_gate": {
+      "enabled": true,
+      "gate_type": "rewarded_ad",
+      "ad_unit_id": "",
+      "required_for": [
+        "export"
+      ],
+      "gate_label": "看广告导出祝福卡预览",
+      "reward_label": "已解锁祝福卡预览导出",
+      "unavailable_hint": "开发者未配置广告位，暂不可下载高清结果",
+      "close_hint": "看完广告后才能下载/导出高清结果"
+    }
   },
   "input_fields": [
     {
@@ -49,7 +61,13 @@
       "type": "select",
       "required": false,
       "placeholder": "选择节日",
-      "options": ["新年", "生日", "中秋", "母亲节", "毕业季"]
+      "options": [
+        "新年",
+        "生日",
+        "中秋",
+        "母亲节",
+        "毕业季"
+      ]
     },
     {
       "id": "message",
@@ -60,12 +78,34 @@
     }
   ],
   "result_fields": [
-    { "id": "to", "label": "收礼人", "type": "text" },
-    { "id": "festival", "label": "节日", "type": "text" },
-    { "id": "message", "label": "祝福语", "type": "text" },
-    { "id": "theme", "label": "贺卡主题", "type": "image" }
+    {
+      "id": "to",
+      "label": "收礼人",
+      "type": "text"
+    },
+    {
+      "id": "festival",
+      "label": "节日",
+      "type": "text"
+    },
+    {
+      "id": "message",
+      "label": "祝福语",
+      "type": "text"
+    },
+    {
+      "id": "theme",
+      "label": "贺卡主题",
+      "type": "image"
+    }
   ],
-  "pages": ["index", "form", "result", "greeting", "profile"],
+  "pages": [
+    "index",
+    "form",
+    "result",
+    "greeting",
+    "profile"
+  ],
   "share_hooks": [
     "送你一张专属祝福贺卡",
     "填名字和祝福语，一键生成祝福贺卡群发好友"
@@ -82,7 +122,9 @@
     "祝福内容需过滤违法违规与敏感信息",
     "不得用于商业营销骚扰或诱导分享之外的违规导流"
   ],
-  "supported_platforms": ["wechat"],
+  "supported_platforms": [
+    "wechat"
+  ],
   "mock_examples": [
     {
       "title": "专属祝福贺卡",

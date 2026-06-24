@@ -31,6 +31,11 @@ export interface GrowthLoopSummary {
   download_supported?: boolean
   export_supported?: boolean
   capability_mode?: 'real' | 'fallback_preview' | ''
+  // 激励广告下载门槛摘要（P0-2 商业闭环卡片）。
+  download_gate_enabled?: boolean
+  download_gate_type?: string
+  download_gate_required_for?: string[]
+  effective_note?: string
 }
 
 export interface PipelineStep {

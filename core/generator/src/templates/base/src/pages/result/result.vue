@@ -164,7 +164,7 @@
           {{ result.unlockHint || '分享解锁更多内容' }}
         </button>
         <button v-if="result.exportSupported && canExport" class="btn-export" @click="handleExport">
-          {{ result.exportLabel || '导出 / 下载' }}
+          {{ downloadButtonLabel }}
         </button>
         <text v-else-if="result.exportSupported && !canExport" class="export-hint">{{ result.exportLabel || '导出暂不可用' }}</text>
       </view>
@@ -187,7 +187,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
-import { loadResult, unlockResult, classifyExportTarget, type GeneratedResult } from '../../services/generation'
+import { loadResult, unlockResult, classifyExportTarget, isRewardedAdRequired, requestRewardedAdUnlock, type GeneratedResult } from '../../services/generation'
+import { trackGrowthEvent, growthContextFromResult } from '../../services/analytics'
 
 const result = ref<GeneratedResult | null>(null)
 
@@ -252,6 +253,19 @@ const canExport = computed(() =>
   !!result.value && classifyExportTarget(result.value).kind !== 'none',
 )
 
+// 下载/导出是否被激励广告门槛挡住（需看广告且未解锁）。
+const adGated = computed(() => !!result.value && isRewardedAdRequired(result.value))
+
+// 下载按钮文案：未解锁显示 gate_label（看广告下载…），已解锁显示 reward/export_label。
+const downloadButtonLabel = computed(() => {
+  const r = result.value
+  if (!r) return '导出 / 下载'
+  const gate = r.downloadGate
+  if (adGated.value && gate && gate.gate_label) return gate.gate_label
+  if (!adGated.value && gate && gate.reward_label) return gate.reward_label
+  return r.exportLabel || '导出 / 下载'
+})
+
 // 水印文案：优先用事实源 watermarkLabel，回退通用文案。
 const watermarkText = computed(() => {
   const label = result.value?.watermarkLabel
@@ -262,31 +276,121 @@ onLoad((options: any) => {
   const id = options?.id ? decodeURIComponent(options.id) : ''
   if (id) {
     result.value = loadResult(id)
+    // 漏斗起点：结果页浏览。
+    if (result.value) trackGrowthEvent('result_view', growthContextFromResult(result.value))
   }
 })
 
-// 分享解锁（本地 mock）：按 growth_loop 去水印能力决定结果，不假装去掉不支持去水印的水印。
-function handleUnlock() {
+// 去水印解锁：若 download_gate.required_for 含 remove_watermark，则必须看广告才去水印
+// （不再单纯分享就去水印）；否则沿用分享解锁（仅当事实源 removeWatermarkSupported）。
+async function handleUnlock() {
   if (!result.value) return
+  const gate = result.value.downloadGate
+  const adForWatermark = !!(gate && gate.enabled && gate.gate_type === 'rewarded_ad'
+    && gate.required_for && gate.required_for.indexOf('remove_watermark') !== -1)
+
+  if (adForWatermark && isRewardedAdRequired(result.value)) {
+    const res = await requestRewardedAdUnlock(result.value.id)
+    if (!res.ok) {
+      if (res.reason === 'not_configured') {
+        uni.showToast({ title: gate?.unavailable_hint || '广告暂不可用，请稍后重试', icon: 'none' })
+      } else if (res.reason === 'closed_early') {
+        uni.showToast({ title: gate?.close_hint || '看完广告后才能去水印', icon: 'none' })
+      } else {
+        uni.showToast({ title: '广告暂不可用，请稍后重试', icon: 'none' })
+      }
+      return
+    }
+    if (res.result) result.value = { ...res.result }
+    const removed = result.value.watermarkEnabled === false
+    uni.showToast({ title: removed ? '已解锁高清无水印' : '已解锁', icon: 'success' })
+    return
+  }
+
+  // 无广告门槛：分享解锁（按 growth_loop 去水印能力，不假装去掉不支持去水印的水印）。
   const updated = unlockResult(result.value.id)
   if (updated) {
     result.value = { ...updated }
     const removed = updated.watermarkEnabled === false
-    uni.showToast({
-      title: removed ? '已解锁高清无水印' : '已分享解锁',
-      icon: 'success',
-    })
+    uni.showToast({ title: removed ? '已解锁高清无水印' : '已分享解锁', icon: 'success' })
   }
 }
 
-// 导出 / 下载：诚实可用 MVP。导出目标由纯函数 classifyExportTarget 判定（与单测同源），
-// 不再让 UI 自己零散判断，避免「exportSupported=true 但点击不可用」的假承诺。
-// - remote_image：downloadFile + saveImageToPhotosAlbum，真存相册；
-// - text（脚本/祝福卡/通用文本）：setClipboardData 复制，真实可用；
-// - none（仅 base64 无 URL / 无可导出内容）：诚实提示不可导出，绝不假装成功。
-function handleExport() {
+// 导出 / 下载：激励广告门槛 + 诚实可用 MVP（P0-2）。
+// 1) exportSupported=false / 无导出路径：诚实提示不可下载，不进入广告。
+// 2) 需要广告且未解锁：先 requestRewardedAdUnlock，看完广告才执行保存。
+// 3) 广告未配置/出错/中途关闭：诚实提示，不假装下载成功。
+// 4) 解锁后：按 classifyExportTarget 真正保存（图存相册 / 视频存相册 / 文本复制）。
+async function handleExport() {
+  if (!result.value) return
+  // 漏斗：点击下载。
+  trackGrowthEvent('download_click', {
+    ...growthContextFromResult(result.value),
+    export_kind: classifyExportTarget(result.value).kind,
+  })
+
+  // 不可导出（base64-only / 本地预览 / 无内容）：诚实提示，不进入广告。
+  if (result.value.exportSupported === false || !canExport.value) {
+    uni.showToast({ title: result.value.exportLabel || '当前结果暂无可下载内容', icon: 'none' })
+    return
+  }
+
+  // 需要看广告且未解锁：先走激励广告。
+  if (isRewardedAdRequired(result.value)) {
+    const gate = result.value.downloadGate
+    const res = await requestRewardedAdUnlock(result.value.id)
+    if (!res.ok) {
+      if (res.reason === 'not_configured') {
+        uni.showToast({ title: (gate && gate.unavailable_hint) || '广告暂不可用，请稍后重试', icon: 'none' })
+      } else if (res.reason === 'closed_early') {
+        uni.showToast({ title: (gate && gate.close_hint) || '看完广告后才能下载高清结果', icon: 'none' })
+      } else {
+        uni.showToast({ title: '广告暂不可用，请稍后重试', icon: 'none' })
+      }
+      return
+    }
+    // 解锁成功：刷新本地状态（去水印/downloadUnlocked 已在 markAdUnlocked 落库）。
+    if (res.result) result.value = { ...res.result }
+  }
+
+  // 已解锁（或本就无需广告）：执行真实导出。
+  doExport()
+}
+
+// 真实保存：remote_video -> 存视频；remote_image -> 存图片；text -> 复制剪贴板。
+function doExport() {
   if (!result.value) return
   const target = classifyExportTarget(result.value)
+  const ctx = { ...growthContextFromResult(result.value), export_kind: target.kind }
+  // 漏斗：开始导出。
+  trackGrowthEvent('export_start', ctx)
+
+  if (target.kind === 'remote_video' && target.video) {
+    uni.showLoading({ title: '正在保存视频…' })
+    uni.downloadFile({
+      url: target.video,
+      success: (d: any) => {
+        if (d.statusCode !== 200 || !d.tempFilePath) {
+          uni.hideLoading()
+          trackGrowthEvent('export_failed', { ...ctx, reason: 'download_failed' })
+          uni.showToast({ title: '下载失败，请稍后重试', icon: 'none' })
+          return
+        }
+        uni.saveVideoToPhotosAlbum({
+          filePath: d.tempFilePath,
+          success: () => { uni.hideLoading(); trackGrowthEvent('export_success', ctx); uni.showToast({ title: '已保存到相册', icon: 'success' }) },
+          fail: () => {
+            uni.hideLoading()
+            trackGrowthEvent('save_permission_failed', { ...ctx, reason: 'save_video_failed' })
+            trackGrowthEvent('export_failed', { ...ctx, reason: 'save_video_failed' })
+            uni.showToast({ title: '保存失败，请允许相册权限后重试', icon: 'none' })
+          },
+        })
+      },
+      fail: () => { uni.hideLoading(); trackGrowthEvent('export_failed', { ...ctx, reason: 'download_failed' }); uni.showToast({ title: '下载失败，请稍后重试', icon: 'none' }) },
+    })
+    return
+  }
 
   if (target.kind === 'remote_image' && target.image) {
     uni.showLoading({ title: '正在保存…' })
@@ -295,25 +399,22 @@ function handleExport() {
       success: (d: any) => {
         if (d.statusCode !== 200 || !d.tempFilePath) {
           uni.hideLoading()
+          trackGrowthEvent('export_failed', { ...ctx, reason: 'download_failed' })
           uni.showToast({ title: '下载失败，请稍后重试', icon: 'none' })
           return
         }
         uni.saveImageToPhotosAlbum({
           filePath: d.tempFilePath,
-          success: () => {
-            uni.hideLoading()
-            uni.showToast({ title: '已保存到相册', icon: 'success' })
-          },
+          success: () => { uni.hideLoading(); trackGrowthEvent('export_success', ctx); uni.showToast({ title: '已保存到相册', icon: 'success' }) },
           fail: () => {
             uni.hideLoading()
+            trackGrowthEvent('save_permission_failed', { ...ctx, reason: 'save_image_failed' })
+            trackGrowthEvent('export_failed', { ...ctx, reason: 'save_image_failed' })
             uni.showToast({ title: '保存失败，请允许相册权限后重试', icon: 'none' })
           },
         })
       },
-      fail: () => {
-        uni.hideLoading()
-        uni.showToast({ title: '下载失败，请稍后重试', icon: 'none' })
-      },
+      fail: () => { uni.hideLoading(); trackGrowthEvent('export_failed', { ...ctx, reason: 'download_failed' }); uni.showToast({ title: '下载失败，请稍后重试', icon: 'none' }) },
     })
     return
   }
@@ -321,13 +422,13 @@ function handleExport() {
   if (target.kind === 'text' && target.text) {
     uni.setClipboardData({
       data: target.text,
-      success: () => uni.showToast({ title: '已复制到剪贴板', icon: 'success' }),
-      fail: () => uni.showToast({ title: '复制失败，请重试', icon: 'none' }),
+      success: () => { trackGrowthEvent('export_success', ctx); uni.showToast({ title: '已复制到剪贴板', icon: 'success' }) },
+      fail: () => { trackGrowthEvent('export_failed', { ...ctx, reason: 'clipboard_failed' }); uni.showToast({ title: '复制失败，请重试', icon: 'none' }) },
     })
     return
   }
 
-  // none：无真实导出路径（仅 base64 无 URL / 无内容），诚实告知，不假装。
+  trackGrowthEvent('export_failed', { ...ctx, reason: 'no_export_path' })
   uni.showToast({ title: '当前结果暂无可导出内容', icon: 'none' })
 }
 

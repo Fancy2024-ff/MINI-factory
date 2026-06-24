@@ -112,20 +112,33 @@ const generationBackendSummary = computed(() => {
 const realGenerationSummary = computed(() => {
   const gs: any = props.job?.artifacts?.['generator-source.json']
   if (!gs || gs.template_status === undefined) return ''
+  // 运行时有效能力优先：mock 构建下核心模板已折算为 fallback_preview，不显示「真实生成」。
+  const eff = gs.effective_growth_loop_summary
+  if (eff && eff.capability_mode) {
+    return eff.capability_mode === 'real' ? '真实生成' : '本地预览 / fallback'
+  }
   if (gs.real_generation) return '真实生成'
   return gs.fallback_mode ? 'honest fallback / preview' : '本地预览'
 })
 
 const boundaryNoteSummary = computed(() => {
   const gs: any = props.job?.artifacts?.['generator-source.json']
+  // 优先展示运行时有效口径说明（mock 构建：当前为本地预览，非真实高清下载）。
+  const eff = gs?.effective_growth_loop_summary
+  if (eff && eff.effective_note) return eff.effective_note
   return gs?.boundary_note || ''
 })
 
-// 传播闭环摘要（来自 generator-source.json.growth_loop_summary / codegen_report，P0-2）。
-// 让老板在控制台一眼看出：生成的小程序带不带分享/解锁/水印/去水印/品牌/导出等传播机制。
+// 传播闭环摘要（优先 effective/runtime，回退 template/codegen_report，P0-2 finding #6）。
+// 让老板在控制台一眼看出：生成的小程序带不带分享/解锁/水印/去水印/品牌/导出等传播机制，
+// 且 mock 构建下不会被显示成「real · 真实生成 / 支持高清导出」。
 const growthLoop = computed<Record<string, any>>(() => {
   const gs: any = props.job?.artifacts?.['generator-source.json']
-  return gs?.growth_loop_summary || gs?.codegen_report || {}
+  return gs?.effective_growth_loop_summary
+    || gs?.growth_loop_summary
+    || gs?.codegen_report?.effective_growth_loop_summary
+    || gs?.codegen_report
+    || {}
 })
 
 const growthLoopPresent = computed(() => !!growthLoop.value?.growth_loop_present)
@@ -158,6 +171,16 @@ const capabilityModeSummary = computed(() => {
   const mode = growthLoop.value?.capability_mode
   if (!mode) return ''
   return mode === 'real' ? 'real · 真实生成' : 'fallback_preview · 预览'
+})
+
+// 广告门槛摘要（P0-2 商业闭环）：已配置 / 未配置 / 不需要。
+const adGateSummary = computed(() => {
+  const gs: any = props.job?.artifacts?.['generator-source.json']
+  if (!gs) return ''
+  const tmpl = gs.template_growth_loop_summary || gs.growth_loop_summary || gs.codegen_report || {}
+  if (tmpl.download_gate_type !== 'rewarded_ad') return ''
+  const adEnabled = gs.rewarded_ad_enabled ?? gs.codegen_report?.rewarded_ad_enabled
+  return adEnabled ? '已配置' : '未配置'
 })
 
 // 生成器 QA 摘要（来自 generator-qa-report.json，pipeline 接入时才有）
@@ -280,6 +303,10 @@ const statusSummary = computed(() => {
       <div class="status-item" v-if="capabilityModeSummary" data-testid="gl-capability">
         <span class="status-label">当前能力</span>
         <span class="status-value">{{ capabilityModeSummary }}</span>
+      </div>
+      <div class="status-item" v-if="adGateSummary" data-testid="gl-ad-gate">
+        <span class="status-label">广告门槛</span>
+        <span class="status-value">{{ adGateSummary }}</span>
       </div>
       <div class="status-item" v-if="blueprintSummary">
         <span class="status-label">蓝图</span>

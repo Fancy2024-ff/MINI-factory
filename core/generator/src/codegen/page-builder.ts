@@ -172,6 +172,42 @@ function validateGrowthLoop(template: string, cfg: any): void {
   if (cfg.real_generation === false && gl.capability_mode !== "fallback_preview") {
     throw new Error(`${template} real_generation=false 但 growth_loop.capability_mode=${gl.capability_mode}`);
   }
+  validateDownloadGate(template, gl);
+}
+
+// download_gate（激励广告下载门槛）parity 校验（与 Python _validate_download_gate 对齐）。
+const DOWNLOAD_GATE_TYPES = new Set(["rewarded_ad", "none"]);
+const DOWNLOAD_GATE_REQUIRED_KEYS = [
+  "enabled", "gate_type", "required_for",
+  "gate_label", "reward_label", "unavailable_hint", "close_hint",
+];
+const DOWNLOAD_GATE_REQUIRED_FOR = new Set(["download", "remove_watermark", "export"]);
+const VIDEO_BOUNDARY_TEMPLATES = new Set(["funny-video-viral", "blessing-video-viral"]);
+const FORBIDDEN_VIDEO_GATE_PHRASES = ["下载视频", "下载祝福视频", "生成视频", "真实视频", "视频已生成"];
+
+function validateDownloadGate(template: string, gl: any): void {
+  const gate = gl.download_gate;
+  if (gate === undefined || gate === null) return; // 可选
+  if (typeof gate !== "object") {
+    throw new Error(`${template}/template.json growth_loop.download_gate 必须是对象`);
+  }
+  const miss = DOWNLOAD_GATE_REQUIRED_KEYS.filter((k) => !(k in gate));
+  if (miss.length) {
+    throw new Error(`${template}/template.json download_gate 缺少键: ${miss.join(", ")}`);
+  }
+  if (!DOWNLOAD_GATE_TYPES.has(gate.gate_type)) {
+    throw new Error(`${template}/template.json download_gate.gate_type=${gate.gate_type} 非法`);
+  }
+  if (!Array.isArray(gate.required_for) || gate.required_for.some((x: string) => !DOWNLOAD_GATE_REQUIRED_FOR.has(x))) {
+    throw new Error(`${template}/template.json download_gate.required_for 非法: ${JSON.stringify(gate.required_for)}`);
+  }
+  if (VIDEO_BOUNDARY_TEMPLATES.has(template)) {
+    const blob = `${gate.gate_label || ""} ${gate.reward_label || ""}`;
+    const hit = FORBIDDEN_VIDEO_GATE_PHRASES.filter((p) => blob.includes(p));
+    if (hit.length) {
+      throw new Error(`${template}/template.json download_gate 文案不得宣称视频下载/生成: ${hit.join(", ")}`);
+    }
+  }
 }
 
 // 取模板 growth_loop：显式（viral）原样透传；无显式（ai-image/兜底）派生通用闭环。

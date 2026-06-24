@@ -22,6 +22,10 @@ import { SELECTED_TEMPLATE, PREVIEW_TYPE } from '../config/template'
 // blueprint.json 由 codegen 在生成项目时写入（template.json -> blueprint）。
 import blueprintJson from '../config/blueprint.json'
 import { API_BASE, GENERATION_MODE, IMAGE_GENERATION_PATH, TEMPLATE_GENERATION_PATH } from '../config/api'
+// 激励广告配置（codegen 注入）：未配置时 enabled=false + 空 id，运行时诚实提示。
+import { REWARDED_AD_UNIT_ID, REWARDED_AD_ENABLED } from '../config/ads'
+// 下载漏斗埋点：广告闭环每一步可观测、失败原因可区分（纯本地，不依赖外部服务）。
+import { trackGrowthEvent, growthContextFromResult } from './analytics'
 
 // 真实后端覆盖的模板（与后端 template_generation.SUPPORTED_TEMPLATES 对齐）。
 const API_TEMPLATES = ['ai-image', 'avatar-viral', 'sticker-viral', 'pet-talk-viral']
@@ -49,6 +53,17 @@ export interface MockExample {
 // 结构化传播闭环事实源（template.json.growth_loop -> blueprint -> 运行时）。
 // 这是「这套小程序带不带传播机制」的单一事实源：分享 CTA / 解锁 / 水印 / 去水印 /
 // 品牌露出 / 下载导出 / 能力真实度，全部结构化，不靠页面硬编码通用文案。
+export interface DownloadGate {
+  enabled: boolean
+  gate_type: 'rewarded_ad' | 'none'
+  ad_unit_id?: string
+  required_for: string[]   // download | remove_watermark | export
+  gate_label: string       // 未解锁文案，如「看广告下载高清无水印」
+  reward_label: string     // 已解锁文案
+  unavailable_hint: string // 广告未配置/不可用提示
+  close_hint: string       // 用户中途关闭提示
+}
+
 export interface GrowthLoop {
   has_share_cta: boolean
   share_cta_label: string
@@ -69,6 +84,8 @@ export interface GrowthLoop {
   capability_mode: 'real' | 'fallback_preview'
   capability_note: string
   result_layer_logic?: string
+  // 激励广告下载门槛（P0-2）：下载/去水印/导出前需看完 rewarded video ad。
+  download_gate?: DownloadGate
 }
 
 export interface Blueprint {
@@ -136,6 +153,12 @@ export interface GeneratedResult {
   exportLabel?: string
   capabilityMode?: 'real' | 'fallback_preview'
   capabilityNote?: string
+  // 激励广告下载门槛（P0-2）：下载高清/去水印前需看完 rewarded video ad。
+  downloadGate?: DownloadGate
+  adUnlocked?: boolean        // 看完广告后置 true
+  downloadUnlocked?: boolean  // 看完广告后置 true（下载/导出放行）
+  adUnlockRequired?: boolean  // 该结果是否需要广告解锁才能下载
+  videoUrl?: string           // 真实视频 URL（仅当后端返回，目前预留）
   // API 失败降级标记：true 表示核心模板真实链路失败、临时回退本地预览，不伪装成功。
   apiFailed?: boolean
   fallbackReason?: string
@@ -149,6 +172,79 @@ export interface GenerateInput {
   text?: string
   assetPlaceholder?: string
   extra?: Record<string, any>
+}
+
+// 表单输入归一（纯函数，便于单测）：把 blueprint.input_fields + 用户填写
+// 归一成 { text, extra, assetPlaceholder, valid, missingRequired }。规则（P0-1 收口）：
+// - mainText = 第一个 text/textarea 字段（必填优先）的值，作为 prompt/text；
+// - 所有非 image 字段都按 id 写入 extra（含 primary 字段本身，避免主字段语义丢失，
+//   例如 avatar 的 style 必须同时进 text 和 extra.style）；
+// - image 字段仅占位（drives_generation=false）：只产出 assetPlaceholder 标记，
+//   不进 extra、不作为生成输入；
+// - required 校验：所有 required 且 type!==image 的字段必须有值（text/textarea 看
+//   values，select 看 selected）；缺失项进 missingRequired，valid=false；
+// - 无 required 字段时退回「至少有 mainText 或任一非 image 字段有值」；
+// - 占位图片永远不参与 valid 判断。
+export interface FormField {
+  id: string
+  type?: string
+  required?: boolean
+  options?: any[]
+  drives_generation?: boolean
+}
+
+export interface BuiltGenerateInput {
+  text: string
+  extra: Record<string, any>
+  assetPlaceholder: string
+  valid: boolean
+  missingRequired: string[]
+}
+
+export function buildGenerateInput(
+  fields: FormField[],
+  values: Record<string, string>,
+  selected: Record<string, string>,
+  assetPicked: Record<string, boolean>,
+): BuiltGenerateInput {
+  const list = Array.isArray(fields) ? fields : []
+  const textFields = list.filter((f) => f.type === 'text' || f.type === 'textarea')
+  const primary = textFields.find((f) => f.required) || textFields[0] || null
+
+  const valueOf = (f: FormField): string => {
+    if (f.type === 'select') return (selected[f.id] || '').trim()
+    return (values[f.id] || '').trim()
+  }
+
+  const mainText = primary ? valueOf(primary) : ''
+
+  // 所有非 image 字段都进 extra（含 primary），保证主字段语义不丢。
+  const extra: Record<string, any> = {}
+  for (const f of list) {
+    if (f.type === 'image') continue
+    const v = valueOf(f)
+    if (v) extra[f.id] = v
+  }
+
+  // 占位图片：仅作辅助标记，不参与 valid，也不作为生成输入。
+  const hasPlaceholderAsset = list.some((f) => f.type === 'image' && assetPicked[f.id] === true)
+  const assetPlaceholder = hasPlaceholderAsset ? '素材占位（不参与生成）' : ''
+
+  // required 校验：所有 required 且非 image 的字段必须有值（image 无真实上传链，不算）。
+  const missingRequired: string[] = []
+  for (const f of list) {
+    if (!f.required || f.type === 'image') continue
+    if (!valueOf(f)) missingRequired.push(f.id)
+  }
+
+  // 有 required 字段：必须全部满足才有效；
+  // 无 required 字段：退回「至少有真实输入」（mainText 或任一非 image 字段）。
+  const hasRequired = list.some((f) => f.required && f.type !== 'image')
+  const valid = missingRequired.length === 0 && (
+    hasRequired ? true : (!!mainText || Object.keys(extra).length > 0)
+  )
+
+  return { text: mainText, extra, assetPlaceholder, valid, missingRequired }
 }
 
 // 真实生成模式由 config/api.ts 控制。前端只知道 apps/api 地址，不接触中转站 URL/key。
@@ -236,6 +332,7 @@ function genId(): string {
 // 分享 CTA / 解锁 / 水印 / 去水印 / 品牌 / 导出 / 能力真实度始终来自事实源、口径一致。
 function growthFields(bp: Blueprint): Partial<GeneratedResult> {
   const gl = bp.growth_loop || FALLBACK_BLUEPRINT.growth_loop!
+  const gate = gl.download_gate
   return {
     growthLoop: gl,
     hasShareCta: gl.has_share_cta,
@@ -253,6 +350,11 @@ function growthFields(bp: Blueprint): Partial<GeneratedResult> {
     exportLabel: gl.export_label,
     capabilityMode: gl.capability_mode,
     capabilityNote: gl.capability_note,
+    // 激励广告门槛（P0-2）：透传 gate + 是否需要广告解锁（未解锁初始态）。
+    downloadGate: gate,
+    adUnlockRequired: !!(gate && gate.enabled && gate.gate_type === 'rewarded_ad'),
+    adUnlocked: false,
+    downloadUnlocked: false,
   }
 }
 
@@ -300,12 +402,14 @@ function downgradeGrowthLoopForFallback(bp: Blueprint, reason: string): Partial<
 
 // --- 导出能力判定（纯函数，供 result.vue 行为复用 + 单测，finding #1/#3）---
 // 把「这个结果到底能怎么导出」从 UI 抽出成可测纯函数：
+// 把「这个结果到底能怎么导出」从 UI 抽出成可测纯函数：
+//   remote_video  -> 有 http(s) 视频 URL，可 downloadFile + saveVideoToPhotosAlbum；
 //   remote_image  -> 有 http(s) 图片 URL，可 downloadFile + saveImageToPhotosAlbum；
 //   text          -> 脚本/祝福卡/通用文本，可 setClipboardData 复制；
 //   none          -> 仅 base64 无 URL / 无可导出内容，无真实导出路径。
 // 关键约束：exportSupported=true 的结果必须 classifyExportTarget !== 'none'，
 // 否则就是假承诺（base64-only 假导出正是栽在这里）。
-export type ExportKind = 'remote_image' | 'text' | 'none'
+export type ExportKind = 'remote_video' | 'remote_image' | 'text' | 'none'
 
 export function buildExportText(result: Partial<GeneratedResult>): string {
   const pd: any = (result && result.previewData) || {}
@@ -328,13 +432,18 @@ export function buildExportText(result: Partial<GeneratedResult>): string {
 
 export function classifyExportTarget(
   result: Partial<GeneratedResult>,
-): { kind: ExportKind; image?: string; text?: string } {
+): { kind: ExportKind; image?: string; video?: string; text?: string } {
   const pd: any = (result && result.previewData) || {}
-  // 1. 远程图片 URL：可真实保存相册。
+  // 1. 远程视频 URL（仅当后端真返回 video_url / result.videoUrl）：可存相册。
+  const videoUrl = (result && result.videoUrl) || pd.video_url || pd.video || ''
+  if (typeof videoUrl === 'string' && /^https?:\/\//.test(videoUrl)) {
+    return { kind: 'remote_video', video: videoUrl }
+  }
+  // 2. 远程图片 URL：可真实保存相册。
   if (typeof pd.image === 'string' && /^https?:\/\//.test(pd.image)) {
     return { kind: 'remote_image', image: pd.image }
   }
-  // 2. 文本型结果：可复制。base64-only（无 URL）不算可导出图片，落到文本/none。
+  // 3. 文本型结果：可复制。base64-only（无 URL）不算可导出图片，落到文本/none。
   const text = buildExportText(result)
   if (text) return { kind: 'text', text }
   return { kind: 'none' }
@@ -565,6 +674,10 @@ function buildApiFailedFallback(
     api_failed: true,
     fallback_note: '真实生成暂时不可用，已临时回退本地预览',
   }
+  // 真实链路失败：清掉 mock_example 里可能带的占位 image/image_base64，
+  // 否则结果会残留一张"占位图"被前端当成真实生成图展示（hasRealImage 误判）。
+  delete (base.previewData as any).image
+  delete (base.previewData as any).image_base64
   return {
     id: genId(),
     createdAt: Date.now(),
@@ -694,4 +807,140 @@ export function unlockResult(id: string): GeneratedResult | null {
   r.unlocked = true
   saveResult(r)
   return r
+}
+
+// ===== 激励广告（rewarded video ad）下载门槛（P0-2）=====
+// 用户预览结果后，要下载高清无水印图片/视频，必须先看完激励广告。
+// 广告由开发者配置 adUnitId（config/ads.ts，codegen 注入）；未配置时诚实提示，不假装完成。
+
+// 该结果是否需要激励广告解锁下载（gate.enabled + rewarded_ad，且尚未解锁）。
+export function isRewardedAdRequired(result: GeneratedResult): boolean {
+  const gate = result.downloadGate
+  if (!gate || !gate.enabled || gate.gate_type !== 'rewarded_ad') return false
+  return result.adUnlocked !== true
+}
+
+// 看完广告后落库：adUnlocked + downloadUnlocked=true；若事实源支持去水印则去水印。
+export function markAdUnlocked(id: string): GeneratedResult | null {
+  const r = loadResult(id)
+  if (!r) return null
+  r.adUnlocked = true
+  r.downloadUnlocked = true
+  r.unlocked = true
+  const gate = r.downloadGate
+  const requiresRemove = !!(gate && gate.required_for && gate.required_for.indexOf('remove_watermark') !== -1)
+  // 去水印仅当事实源支持，且 gate 要求 remove_watermark（看完广告才去）。
+  let removed = false
+  if (requiresRemove && r.removeWatermarkSupported !== false) {
+    r.watermarkEnabled = false
+    removed = true
+  }
+  saveResult(r)
+  // 漏斗：解锁成功；若同时去水印再记一条 watermark_removed。
+  trackGrowthEvent('download_unlocked', growthContextFromResult(r))
+  if (removed) trackGrowthEvent('watermark_removed', growthContextFromResult(r))
+  return r
+}
+
+// 兼容别名：看完激励广告后解锁下载（语义同 markAdUnlocked）。
+export function unlockAfterRewardedAd(id: string): GeneratedResult | null {
+  return markAdUnlocked(id)
+}
+
+// rewarded video ad 包装：兼容 wx / uni，可注入（单测不依赖真实 SDK）。
+export interface RewardedAdLike {
+  load: () => Promise<void> | void
+  show: () => Promise<void> | void
+  onClose: (cb: (res: { isEnded: boolean }) => void) => void
+  onError: (cb: (err: any) => void) => void
+}
+export type RewardedAdFactory = (adUnitId: string) => RewardedAdLike | null
+
+// 默认工厂：用平台 createRewardedVideoAd（wx 优先，回退 uni）。单测会注入 mock 工厂。
+function defaultRewardedAdFactory(adUnitId: string): RewardedAdLike | null {
+  const api: any = typeof wx !== 'undefined' ? wx : (typeof uni !== 'undefined' ? uni : null)
+  if (!api || typeof api.createRewardedVideoAd !== 'function') return null
+  const ad = api.createRewardedVideoAd({ adUnitId })
+  return {
+    load: () => ad.load && ad.load(),
+    show: () => ad.show && ad.show(),
+    onClose: (cb) => ad.onClose && ad.onClose(cb),
+    onError: (cb) => ad.onError && ad.onError(cb),
+  }
+}
+
+let _rewardedAdFactory: RewardedAdFactory = defaultRewardedAdFactory
+// 测试注入点：替换 rewarded ad 工厂（生产代码不调用）。
+export function __setRewardedAdFactory(f: RewardedAdFactory): void {
+  _rewardedAdFactory = f
+}
+
+export type RewardedAdUnlockReason = 'not_configured' | 'ad_error' | 'closed_early' | 'no_result'
+
+// 请求激励广告解锁下载。规则：
+// - adUnitId 为空 / 广告未启用：ok=false reason='not_configured'（诚实提示，不假装）；
+// - 找不到结果：ok=false reason='no_result'；
+// - 广告看完 isEnded=true：markAdUnlocked，ok=true；
+// - 中途关闭 isEnded=false：ok=false reason='closed_early'，不解锁；
+// - load/show/onError 报错：ok=false reason='ad_error'，不解锁。
+export async function requestRewardedAdUnlock(resultId: string): Promise<{
+  ok: boolean
+  reason?: RewardedAdUnlockReason
+  result?: GeneratedResult
+}> {
+  const current = loadResult(resultId)
+  if (!current) return { ok: false, reason: 'no_result' }
+
+  const gate = current.downloadGate
+  const adUnitId = (gate && gate.ad_unit_id) || REWARDED_AD_UNIT_ID || ''
+  const ctx = growthContextFromResult(current)
+  // 漏斗：请求拉广告。
+  trackGrowthEvent('rewarded_ad_request', ctx)
+  // 广告位未配置 / 全局未启用：诚实失败，不解锁。
+  if (!REWARDED_AD_ENABLED || !adUnitId) {
+    trackGrowthEvent('rewarded_ad_not_configured', { ...ctx, reason: 'not_configured' })
+    return { ok: false, reason: 'not_configured', result: current }
+  }
+
+  const ad = _rewardedAdFactory(adUnitId)
+  if (!ad) {
+    trackGrowthEvent('rewarded_ad_not_configured', { ...ctx, reason: 'no_ad_factory' })
+    return { ok: false, reason: 'not_configured', result: current }
+  }
+
+  return new Promise((resolve) => {
+    let settled = false
+    const done = (r: { ok: boolean; reason?: RewardedAdUnlockReason; result?: GeneratedResult }) => {
+      if (settled) return
+      settled = true
+      resolve(r)
+    }
+    try {
+      ad.onError(() => {
+        trackGrowthEvent('rewarded_ad_show_error', { ...ctx, reason: 'ad_error' })
+        done({ ok: false, reason: 'ad_error', result: loadResult(resultId) || current })
+      })
+      ad.onClose((res) => {
+        // 看完整条广告（isEnded=true）才解锁；中途关闭不解锁。
+        if (res && res.isEnded) {
+          // 漏斗：完播 -> 解锁（markAdUnlocked 内部记 download_unlocked / watermark_removed）。
+          trackGrowthEvent('rewarded_ad_completed', ctx)
+          const updated = markAdUnlocked(resultId)
+          done({ ok: true, result: updated || current })
+        } else {
+          trackGrowthEvent('rewarded_ad_closed_early', { ...ctx, reason: 'closed_early' })
+          done({ ok: false, reason: 'closed_early', result: loadResult(resultId) || current })
+        }
+      })
+      Promise.resolve(ad.load())
+        .then(() => ad.show())
+        .catch(() => {
+          trackGrowthEvent('rewarded_ad_load_error', { ...ctx, reason: 'ad_error' })
+          done({ ok: false, reason: 'ad_error', result: loadResult(resultId) || current })
+        })
+    } catch (e) {
+      trackGrowthEvent('rewarded_ad_show_error', { ...ctx, reason: 'ad_error' })
+      done({ ok: false, reason: 'ad_error', result: loadResult(resultId) || current })
+    }
+  })
 }

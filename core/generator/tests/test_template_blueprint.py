@@ -275,3 +275,52 @@ def test_growth_loop_for_template_unknown_nonviral_falls_back(tmp_path, monkeypa
     gl = growth_loop_for_template("totally-unknown-tool")
     assert gl["capability_mode"] in ("real", "fallback_preview")
     assert "has_share_cta" in gl
+
+
+# --- P0-2 激励广告下载门槛（download_gate）---
+
+DOWNLOAD_GATE_KEYS = (
+    "enabled", "gate_type", "required_for",
+    "gate_label", "reward_label", "unavailable_hint", "close_hint",
+)
+_VIDEO_BOUNDARY = ("funny-video-viral", "blessing-video-viral")
+_FORBIDDEN_VIDEO_PHRASES = ("下载视频", "下载祝福视频", "生成视频", "真实视频", "视频已生成")
+
+
+@pytest.mark.parametrize("template", VIRAL)
+def test_download_gate_fields_complete(template):
+    """5 个 viral 模板的 growth_loop.download_gate 字段完整、gate_type/required_for 合法。"""
+    bp = build_template_blueprint(template, SAMPLE_APP, SAMPLE_PRD)
+    gate = bp["growth_loop"].get("download_gate")
+    assert gate is not None, f"{template} 缺少 download_gate"
+    for k in DOWNLOAD_GATE_KEYS:
+        assert k in gate, f"{template} download_gate 缺键 {k}"
+    assert gate["gate_type"] in ("rewarded_ad", "none")
+    assert isinstance(gate["required_for"], list) and gate["required_for"]
+    for x in gate["required_for"]:
+        assert x in ("download", "remove_watermark", "export")
+
+
+@pytest.mark.parametrize("template", _VIDEO_BOUNDARY)
+def test_video_gate_copy_not_video_download(template):
+    """funny/blessing 的 gate 文案不得出现「下载视频/真实视频」（不伪装真实视频）。"""
+    bp = build_template_blueprint(template, SAMPLE_APP, SAMPLE_PRD)
+    gate = bp["growth_loop"]["download_gate"]
+    blob = f"{gate['gate_label']} {gate['reward_label']} {bp['growth_loop'].get('export_label','')}"
+    for p in _FORBIDDEN_VIDEO_PHRASES:
+        assert p not in blob, f"{template} gate 文案含禁用词「{p}」: {blob}"
+    # required_for 不含 download（视频边界型只导出脚本/卡片预览）。
+    assert "download" not in gate["required_for"]
+
+
+def test_video_gate_claiming_video_download_raises(tmp_path, monkeypatch):
+    """篡改 funny gate 文案宣称「下载视频」-> 校验必须抛 BlueprintError。"""
+    import core.generator.blueprint_builder as bb
+    d = tmp_path / "funny-video-viral"
+    d.mkdir()
+    real = json.loads((bb.TEMPLATES_DIR / "funny-video-viral" / "template.json").read_text(encoding="utf-8-sig"))
+    real["growth_loop"]["download_gate"]["gate_label"] = "看广告下载视频"
+    (d / "template.json").write_text(json.dumps(real, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(bb, "TEMPLATES_DIR", tmp_path)
+    with pytest.raises(BlueprintError):
+        bb.build_template_blueprint("funny-video-viral", SAMPLE_APP, SAMPLE_PRD)

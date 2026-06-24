@@ -21,7 +21,7 @@
     "share_copy": "当前为分镜脚本预览，分享后解锁更多脚本模板",
     "has_unlock": true,
     "unlock_type": "preview_share_unlock",
-    "unlock_hint": "分享预览脚本后解锁更多分镜模板",
+    "unlock_hint": "看完广告后导出分镜脚本预览（非视频）",
     "has_watermark": true,
     "watermark_label": "MiniForge 脚本预览水印",
     "remove_watermark_supported": true,
@@ -33,7 +33,19 @@
     "export_label": "导出脚本预览",
     "capability_mode": "fallback_preview",
     "capability_note": "当前是 honest fallback / preview mode，分享/导出的是分镜脚本预览，不是真实视频生成。",
-    "result_layer_logic": "结果页展示分镜脚本预览 + 醒目 preview mode 提示，分享/解锁/去水印/导出均只针对脚本预览，绝不宣称视频已生成。"
+    "result_layer_logic": "结果页展示分镜脚本预览 + 醒目 preview mode 提示，分享/解锁/去水印/导出均只针对脚本预览，绝不宣称视频已生成。",
+    "download_gate": {
+      "enabled": true,
+      "gate_type": "rewarded_ad",
+      "ad_unit_id": "",
+      "required_for": [
+        "export"
+      ],
+      "gate_label": "看广告导出分镜脚本预览",
+      "reward_label": "已解锁分镜脚本预览导出",
+      "unavailable_hint": "开发者未配置广告位，暂不可下载高清结果",
+      "close_hint": "看完广告后才能下载/导出高清结果"
+    }
   },
   "input_fields": [
     {
@@ -49,14 +61,33 @@
       "type": "select",
       "required": false,
       "placeholder": "选择脚本风格",
-      "options": ["反差", "吐槽", "无厘头", "反转"]
+      "options": [
+        "反差",
+        "吐槽",
+        "无厘头",
+        "反转"
+      ]
     }
   ],
   "result_fields": [
-    { "id": "topic", "label": "主题", "type": "text" },
-    { "id": "shots", "label": "分镜列表", "type": "list" }
+    {
+      "id": "topic",
+      "label": "主题",
+      "type": "text"
+    },
+    {
+      "id": "shots",
+      "label": "分镜列表",
+      "type": "list"
+    }
   ],
-  "pages": ["index", "form", "result", "clip", "profile"],
+  "pages": [
+    "index",
+    "form",
+    "result",
+    "clip",
+    "profile"
+  ],
   "share_hooks": [
     "这个搞笑脚本我能笑一年",
     "输入主题秒出分镜脚本，发起接龙挑战一起拍"
@@ -73,7 +104,9 @@
     "脚本内容需过滤违法违规、低俗与人身攻击",
     "不得生成针对特定真实人物的恶意内容"
   ],
-  "supported_platforms": ["wechat"],
+  "supported_platforms": [
+    "wechat"
+  ],
   "mock_examples": [
     {
       "title": "15 秒搞笑短视频脚本",
@@ -81,9 +114,18 @@
       "preview_data": {
         "topic": "打工人的一天",
         "shots": [
-          { "t": "0-3s", "desc": "夸张开场，抛出反差设定" },
-          { "t": "3-9s", "desc": "冲突升级，密集笑点" },
-          { "t": "9-15s", "desc": "反转结尾 + 行动号召" }
+          {
+            "t": "0-3s",
+            "desc": "夸张开场，抛出反差设定"
+          },
+          {
+            "t": "3-9s",
+            "desc": "冲突升级，密集笑点"
+          },
+          {
+            "t": "9-15s",
+            "desc": "反转结尾 + 行动号召"
+          }
         ]
       },
       "share_title": "这个搞笑脚本我能笑一年",

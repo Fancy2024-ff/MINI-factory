@@ -160,6 +160,11 @@ cp .env.example .env
 # 编辑 .env，必须设置：
 #   DASHBOARD_API_KEY — API 认证密钥
 #   ANTHROPIC_API_KEY — LLM 调用密钥（可选，demo 模式不需要）
+# 可选（生成小程序的增长闭环）：
+#   GENERATION_MODE=api + GENERATED_APP_API_BASE=https://… — 开启真实生成
+#   REWARDED_AD_UNIT_ID=adunit-… — 激励广告位，下载高清/去水印前看广告解锁；
+#     留空则下载门槛禁用，结果页诚实提示「开发者未配置广告位」，不假装广告完成
+#     真机验收 checklist 见 docs/operation/RUNBOOK.md「微信真机验收：激励广告下载闭环」
 docker compose up --build
 ```
 

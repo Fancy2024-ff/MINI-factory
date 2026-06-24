@@ -232,6 +232,105 @@ def _check_growth_loop_productization(miniapp_dir: Path, checks: dict, issues: l
             issues.append(f"核心可跑通模板 {template_id} 被标成 fallback_preview（能力口径错误）")
 
 
+def _check_rewarded_ad_loop(output_dir: Path, miniapp_dir: Path, checks: dict, issues: list[str]) -> None:
+    """检查激励广告下载闭环（P0-2 商业化可验收 + 漏斗埋点）。
+
+    覆盖：blueprint 的 download_gate、ads.ts 配置、result.vue 走广告解锁而非直接下载、
+    导出能力（图/视频/文本预览）、视频边界型不伪装视频、mock 构建 effective=fallback_preview、
+    analytics 埋点存在且被调用。
+    """
+    src = miniapp_dir / "src"
+    result_txt = _read(src / "pages" / "result" / "result.vue")
+    service_txt = _read(src / "services" / "generation.ts")
+    analytics_txt = _read(src / "services" / "analytics.ts")
+    ads_txt = _read(src / "config" / "ads.ts")
+
+    bp: dict = {}
+    try:
+        bp_path = src / "config" / "blueprint.json"
+        if bp_path.exists():
+            bp = json.loads(bp_path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        bp = {}
+    gl = bp.get("growth_loop") if isinstance(bp, dict) else None
+    gl = gl if isinstance(gl, dict) else {}
+    gate = gl.get("download_gate") if isinstance(gl, dict) else None
+    gate = gate if isinstance(gate, dict) else {}
+    template_id = bp.get("template_id", "") if isinstance(bp, dict) else ""
+
+    # 1. blueprint 含 download_gate（viral 模板必须有）。
+    gate_in_bp = bool(gate)
+    checks["rewarded_ad_gate_in_blueprint"] = gate_in_bp
+    if not gate_in_bp:
+        issues.append("blueprint.json 缺少 growth_loop.download_gate（激励广告门槛事实源）")
+
+    # 2. ads.ts 配置存在（REWARDED_AD_UNIT_ID / REWARDED_AD_ENABLED 注入点）。
+    ad_config_present = "REWARDED_AD_UNIT_ID" in ads_txt and "REWARDED_AD_ENABLED" in ads_txt
+    checks["rewarded_ad_config_present"] = ad_config_present
+    if not ad_config_present:
+        issues.append("缺少 src/config/ads.ts 广告位配置（REWARDED_AD_UNIT_ID/REWARDED_AD_ENABLED）")
+
+    # 3. result.vue 经激励广告解锁，不直接下载。
+    uses_unlock = "requestRewardedAdUnlock" in result_txt
+    checks["result_uses_rewarded_ad_unlock"] = uses_unlock
+    if not uses_unlock:
+        issues.append("result.vue 未调用 requestRewardedAdUnlock（下载未经激励广告门槛）")
+
+    # 4. result.vue 根据广告门槛拦截下载（isRewardedAdRequired / adUnlocked / downloadUnlocked）。
+    blocks_before_ad = ("isRewardedAdRequired" in result_txt) and (
+        "adUnlocked" in result_txt or "downloadUnlocked" in result_txt or "isRewardedAdRequired" in result_txt
+    )
+    checks["result_blocks_download_before_ad"] = blocks_before_ad
+    if not blocks_before_ad:
+        issues.append("result.vue 未在广告完成前拦截下载（缺 isRewardedAdRequired/adUnlocked 判断）")
+
+    # 5. result.vue 埋点（trackGrowthEvent）+ analytics 模块存在。
+    tracks_events = ("trackGrowthEvent" in result_txt or "trackGrowthEvent" in service_txt) and bool(analytics_txt)
+    checks["result_tracks_growth_events"] = tracks_events
+    if not tracks_events:
+        issues.append("缺少下载漏斗埋点（analytics.trackGrowthEvent 未接入 result.vue/generation.ts）")
+
+    # 6. 导出能力：图 / 视频 / 文本预览三类保存路径在 result.vue 中存在。
+    checks["export_supports_remote_image"] = "saveImageToPhotosAlbum" in result_txt
+    checks["export_supports_remote_video"] = "saveVideoToPhotosAlbum" in result_txt
+    checks["export_supports_text_preview"] = "setClipboardData" in result_txt
+    if "saveImageToPhotosAlbum" not in result_txt:
+        issues.append("result.vue 缺少图片保存路径（saveImageToPhotosAlbum）")
+    if "saveVideoToPhotosAlbum" not in result_txt:
+        issues.append("result.vue 缺少视频保存路径（saveVideoToPhotosAlbum）")
+    if "setClipboardData" not in result_txt:
+        issues.append("result.vue 缺少文本预览导出路径（setClipboardData）")
+
+    # 7. 视频边界型不伪装视频：gate 文案不得出现下载/真实视频，required_for 不含 download。
+    no_video_claim = True
+    if template_id in _VIDEO_PREVIEW_TEMPLATES:
+        blob = f"{gate.get('gate_label', '')} {gate.get('reward_label', '')} {gl.get('export_label', '')}"
+        forbidden = ["下载视频", "下载祝福视频", "生成视频", "真实视频", "视频已生成"]
+        if any(p in blob for p in forbidden):
+            no_video_claim = False
+            issues.append(f"视频边界型 {template_id} download_gate 文案宣称视频下载/生成（伪装真实视频）")
+        if "download" in (gate.get("required_for") or []):
+            no_video_claim = False
+            issues.append(f"视频边界型 {template_id} download_gate.required_for 不应含 download")
+    checks["no_video_claim_for_preview_templates"] = no_video_claim
+
+    # 8. mock 构建下 effective summary 必须 fallback_preview（generator-source.json）。
+    gen_source: dict = {}
+    try:
+        gs_path = output_dir / "generator-source.json"
+        if gs_path.exists():
+            gen_source = json.loads(gs_path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        gen_source = {}
+    mode = gen_source.get("generation_mode", "")
+    eff = gen_source.get("effective_growth_loop_summary") or {}
+    if mode and mode != "api" and gen_source.get("real_generation") is True:
+        eff_preview = eff.get("capability_mode") == "fallback_preview"
+        checks["mock_runtime_effective_preview_visible"] = eff_preview
+        if not eff_preview:
+            issues.append("mock 构建下核心模板 effective_growth_loop_summary 未降级为 fallback_preview")
+
+
 def run_growth_qa(output_dir: Path, miniapp_dir: Path | None = None) -> dict:
     """检查 growth 产物完整性、关键要素，以及生成代码的传播+交互闭环。"""
     issues: list[str] = []
@@ -296,6 +395,9 @@ def run_growth_qa(output_dir: Path, miniapp_dir: Path | None = None) -> dict:
 
         # 6. 传播闭环产品化分层（P0-2）：blueprint -> generation.ts -> result.vue 三层接入
         _check_growth_loop_productization(miniapp_dir, checks, issues)
+
+        # 7. 激励广告下载闭环（P0-2 商业化可验收 + 漏斗埋点）
+        _check_rewarded_ad_loop(output_dir, miniapp_dir, checks, issues)
 
     passed = all(checks.values())
     return {"passed": passed, "checks": checks, "issues": issues}

@@ -153,6 +153,51 @@ const propagationStats = computed<GlStat[]>(() => {
     { key: 'capability', label: '能力模式', ok: c.capability_mode_visible ?? !!s.capability_mode },
   ]
 })
+
+// 商业闭环卡片（P0-2 可上线验收）：广告门槛 / 解锁条件 / 下载能力 / 当前构建 / 风险提示。
+// 数据源优先级：effective summary > template summary > growth-qa checks > codegen_report。
+const commercialLoop = computed(() => {
+  const gs: any = props.job?.artifacts?.['generator-source.json']
+  const c = growthQaChecks.value
+  const eff = gs?.effective_growth_loop_summary || gs?.codegen_report?.effective_growth_loop_summary || {}
+  const tmpl = gs?.template_growth_loop_summary || gs?.growth_loop_summary || gs?.codegen_report || {}
+  const adEnabled = gs?.rewarded_ad_enabled ?? gs?.codegen_report?.rewarded_ad_enabled
+  const gateType = tmpl.download_gate_type || (c.rewarded_ad_gate_in_blueprint ? 'rewarded_ad' : '')
+  const requiredFor: string[] = tmpl.download_gate_required_for || []
+  const mode = gs?.generation_mode || ''
+  // 有效能力：mock 构建已降级 fallback_preview。
+  const effMode = eff.capability_mode || tmpl.capability_mode || ''
+  const isVideoPreview = (tmpl.capability_mode === 'fallback_preview') && requiredFor.length > 0 && requiredFor.indexOf('download') === -1
+
+  // 广告门槛展示。
+  let adGate = '不需要'
+  if (gateType === 'rewarded_ad') adGate = adEnabled ? '已配置' : '未配置'
+
+  // 下载能力（按有效导出能力 + 模板类型）。
+  let download = '不可下载'
+  if (isVideoPreview) download = '文本预览导出'
+  else if (eff.export_supported === false && tmpl.export_supported) download = '本地预览不可高清下载'
+  else if (tmpl.export_supported) download = '图片 / 视频 / 文本'
+
+  // 当前构建。
+  let build = effMode === 'real' ? 'real · 真实生成' : 'fallback_preview · 预览'
+  if (mode && mode !== 'api') build = effMode === 'real' ? 'real' : 'local preview · 本地预览'
+
+  // 风险提示。
+  const risks: string[] = []
+  if (gateType === 'rewarded_ad' && !adEnabled) risks.push('未配置广告位：下载闭环不可变现')
+  if (mode && mode !== 'api') risks.push('mock 构建：仅本地预览，不提供高清下载')
+  if (isVideoPreview) risks.push('视频模板：只导出脚本/卡片预览，非视频下载')
+
+  return {
+    present: !!(gs && (Object.keys(eff).length || Object.keys(tmpl).length || gateType)),
+    adGate,
+    unlock: gateType === 'rewarded_ad' ? '激励广告' : '无',
+    download,
+    build,
+    risks,
+  }
+})
 </script>
 
 <template>
@@ -215,6 +260,23 @@ const propagationStats = computed<GlStat[]>(() => {
             class="prop-stat"
             :class="st.ok ? 'prop-stat--ok' : 'prop-stat--no'"
           >{{ st.label }}：{{ st.ok ? '有' : '缺' }}</span>
+        </div>
+      </div>
+
+      <!-- 商业闭环状态（P0-2 可上线验收）：广告门槛 / 解锁 / 下载能力 / 构建 / 风险 -->
+      <div class="commercial-card" data-testid="commercial-loop" v-if="job && commercialLoop.present">
+        <div class="prop-header">
+          <span class="prop-name">商业闭环（下载变现）</span>
+          <span class="prop-badge" :class="commercialLoop.adGate === '已配置' ? 'prop-badge--ready' : 'prop-badge--partial'">{{ commercialLoop.build }}</span>
+        </div>
+        <div class="comm-rows">
+          <div class="comm-row"><span class="comm-key">广告门槛</span><span class="comm-val">{{ commercialLoop.adGate }}</span></div>
+          <div class="comm-row"><span class="comm-key">解锁条件</span><span class="comm-val">{{ commercialLoop.unlock }}</span></div>
+          <div class="comm-row"><span class="comm-key">下载能力</span><span class="comm-val">{{ commercialLoop.download }}</span></div>
+          <div class="comm-row"><span class="comm-key">当前构建</span><span class="comm-val">{{ commercialLoop.build }}</span></div>
+        </div>
+        <div v-if="commercialLoop.risks.length" class="comm-risks">
+          <div v-for="(rk, i) in commercialLoop.risks" :key="i" class="comm-risk">⚠ {{ rk }}</div>
         </div>
       </div>
 
@@ -299,6 +361,20 @@ const propagationStats = computed<GlStat[]>(() => {
 .prop-stat { font-size: 11px; padding: 2px 8px; border-radius: 4px; }
 .prop-stat--ok { background: var(--color-green-subtle); color: #166534; }
 .prop-stat--no { background: rgba(0, 0, 0, 0.04); color: var(--color-text-3); }
+
+.commercial-card {
+  background: var(--color-surface-solid);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+.comm-rows { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 8px; }
+.comm-row { display: flex; gap: 6px; font-size: 12px; }
+.comm-key { color: var(--color-text-3); }
+.comm-val { color: var(--color-text-1); font-weight: 500; }
+.comm-risks { display: flex; flex-direction: column; gap: 4px; }
+.comm-risk { font-size: 11px; color: #a8071a; }
 
 .items-grid {
   display: grid;

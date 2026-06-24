@@ -21,7 +21,7 @@
     "share_copy": "一句台词生成宠物说话预览，分享后解锁高清封面/导出",
     "has_unlock": true,
     "unlock_type": "timeline_share_unlock",
-    "unlock_hint": "分享后解锁高清宠物说话预览和去水印导出",
+    "unlock_hint": "看完广告后解锁高清宠物预览/封面下载",
     "has_watermark": true,
     "watermark_label": "MiniForge 宠物预览水印",
     "remove_watermark_supported": true,
@@ -30,10 +30,23 @@
     "brand_label": "MiniForge 出品 · 宠物预览附小程序码",
     "download_supported": true,
     "export_supported": true,
-    "export_label": "导出宠物预览",
+    "export_label": "下载宠物预览",
     "capability_mode": "real",
     "capability_note": "当前核心链路产出宠物说话预览/封面，动态视频和配音是后续增强；分享解锁去水印高清预览。",
-    "result_layer_logic": "结果页展示宠物说话预览/封面 + 含水印，分享 CTA 引导发朋友圈，解锁后去水印并开放高清封面导出（动态视频为后续边界）。"
+    "result_layer_logic": "结果页展示宠物说话预览/封面 + 含水印，分享 CTA 引导发朋友圈，解锁后去水印并开放高清封面导出（动态视频为后续边界）。",
+    "download_gate": {
+      "enabled": true,
+      "gate_type": "rewarded_ad",
+      "ad_unit_id": "",
+      "required_for": [
+        "download",
+        "remove_watermark"
+      ],
+      "gate_label": "看广告下载高清宠物预览/封面",
+      "reward_label": "已解锁高清宠物预览/封面下载",
+      "unavailable_hint": "开发者未配置广告位，暂不可下载高清结果",
+      "close_hint": "看完广告后才能下载/导出高清结果"
+    }
   },
   "input_fields": [
     {
@@ -53,11 +66,29 @@
     }
   ],
   "result_fields": [
-    { "id": "line", "label": "台词", "type": "text" },
-    { "id": "duration", "label": "时长(秒)", "type": "number" },
-    { "id": "poster", "label": "视频封面", "type": "image" }
+    {
+      "id": "line",
+      "label": "台词",
+      "type": "text"
+    },
+    {
+      "id": "duration",
+      "label": "时长(秒)",
+      "type": "number"
+    },
+    {
+      "id": "poster",
+      "label": "视频封面",
+      "type": "image"
+    }
   ],
-  "pages": ["index", "form", "result", "upload", "profile"],
+  "pages": [
+    "index",
+    "form",
+    "result",
+    "upload",
+    "profile"
+  ],
   "share_hooks": [
     "我家宠物开口说话了！",
     "一句台词生成会说话的宠物预览"
@@ -74,7 +105,9 @@
     "上传宠物照片需为用户本人持有，不涉及他人隐私",
     "台词内容需过滤违法违规与误导信息"
   ],
-  "supported_platforms": ["wechat"],
+  "supported_platforms": [
+    "wechat"
+  ],
   "mock_examples": [
     {
       "title": "会说话的宠物预览",
