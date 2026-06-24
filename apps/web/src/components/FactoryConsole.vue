@@ -121,6 +121,45 @@ const boundaryNoteSummary = computed(() => {
   return gs?.boundary_note || ''
 })
 
+// 传播闭环摘要（来自 generator-source.json.growth_loop_summary / codegen_report，P0-2）。
+// 让老板在控制台一眼看出：生成的小程序带不带分享/解锁/水印/去水印/品牌/导出等传播机制。
+const growthLoop = computed<Record<string, any>>(() => {
+  const gs: any = props.job?.artifacts?.['generator-source.json']
+  return gs?.growth_loop_summary || gs?.codegen_report || {}
+})
+
+const growthLoopPresent = computed(() => !!growthLoop.value?.growth_loop_present)
+
+const shareCtaSummary = computed(() => {
+  if (!growthLoopPresent.value) return ''
+  return growthLoop.value.has_share_cta ? '有' : '无'
+})
+const unlockSummary = computed(() => {
+  if (!growthLoopPresent.value) return ''
+  return growthLoop.value.has_unlock ? '有' : '无'
+})
+const watermarkSummary = computed(() => {
+  if (!growthLoopPresent.value) return ''
+  return growthLoop.value.has_watermark ? '有' : '无'
+})
+const removeWatermarkSummary = computed(() => {
+  if (!growthLoopPresent.value) return ''
+  return growthLoop.value.remove_watermark_supported ? '支持' : '不支持'
+})
+const brandExposureSummary = computed(() => {
+  if (!growthLoopPresent.value) return ''
+  return growthLoop.value.brand_exposure ? '有' : '无'
+})
+const exportSummary = computed(() => {
+  if (!growthLoopPresent.value) return ''
+  return growthLoop.value.export_supported ? '支持' : '已预留'
+})
+const capabilityModeSummary = computed(() => {
+  const mode = growthLoop.value?.capability_mode
+  if (!mode) return ''
+  return mode === 'real' ? 'real · 真实生成' : 'fallback_preview · 预览'
+})
+
 // 生成器 QA 摘要（来自 generator-qa-report.json，pipeline 接入时才有）
 const generatorQaSummary = computed(() => {
   const gq: any = props.job?.artifacts?.['generator-qa-report.json']
@@ -213,6 +252,34 @@ const statusSummary = computed(() => {
       <div class="status-item" v-if="realGenerationSummary">
         <span class="status-label">生成方式</span>
         <span class="status-value">{{ realGenerationSummary }}</span>
+      </div>
+      <div class="status-item" v-if="shareCtaSummary" data-testid="gl-share">
+        <span class="status-label">分享 CTA</span>
+        <span class="status-value">{{ shareCtaSummary }}</span>
+      </div>
+      <div class="status-item" v-if="unlockSummary" data-testid="gl-unlock">
+        <span class="status-label">解锁</span>
+        <span class="status-value">{{ unlockSummary }}</span>
+      </div>
+      <div class="status-item" v-if="watermarkSummary" data-testid="gl-watermark">
+        <span class="status-label">水印</span>
+        <span class="status-value">{{ watermarkSummary }}</span>
+      </div>
+      <div class="status-item" v-if="removeWatermarkSummary" data-testid="gl-remove-watermark">
+        <span class="status-label">去水印</span>
+        <span class="status-value">{{ removeWatermarkSummary }}</span>
+      </div>
+      <div class="status-item" v-if="brandExposureSummary" data-testid="gl-brand">
+        <span class="status-label">品牌露出</span>
+        <span class="status-value">{{ brandExposureSummary }}</span>
+      </div>
+      <div class="status-item" v-if="exportSummary" data-testid="gl-export">
+        <span class="status-label">导出</span>
+        <span class="status-value">{{ exportSummary }}</span>
+      </div>
+      <div class="status-item" v-if="capabilityModeSummary" data-testid="gl-capability">
+        <span class="status-label">当前能力</span>
+        <span class="status-value">{{ capabilityModeSummary }}</span>
       </div>
       <div class="status-item" v-if="blueprintSummary">
         <span class="status-label">蓝图</span>

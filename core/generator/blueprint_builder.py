@@ -144,14 +144,22 @@ def _growth_loop_from_config(template: str, cfg: dict) -> dict:
 def growth_loop_for_template(template: str) -> dict:
     """按模板名取 growth_loop 事实源（供 growth 文档生成消费，单一事实源）。
 
-    - 模板有 template.json：取/派生其 growth_loop；
-    - 无配置（兜底模板名）：返回通用 growth_loop（real_generation=False 派生）。
-    非法 JSON / 校验失败会抛 BlueprintError（与 build_template_blueprint 口径一致）。
+    - viral 模板（VIRAL_TEMPLATES）：load/校验出错必须 re-raise BlueprintError，
+      不允许 generic fallback——否则单一事实源坏掉时增长文档会继续产出通用闭环、掩盖错误。
+    - 非 viral / 未知模板：缺配置或校验失败时回退通用 growth_loop（文档主链路稳定优先）。
     """
+    if template in VIRAL_TEMPLATES:
+        # viral 模板：不吞错。load_template_config 内部对坏配置/缺 growth_loop 会抛 BlueprintError。
+        cfg = load_template_config(template)
+        if cfg is None:
+            raise BlueprintError(
+                f"传播型模板 {template} 缺少 template.json，拒绝静默降级。"
+            )
+        return _growth_loop_from_config(template, cfg)
+    # 非 viral：缺配置/坏配置都回退通用闭环，不阻断文档主链路。
     try:
         cfg = load_template_config(template)
     except BlueprintError:
-        # 文档生成不应因模板配置问题中断主链路质检，退回通用闭环。
         return _generic_growth_loop({})
     if cfg is None:
         return _generic_growth_loop({})

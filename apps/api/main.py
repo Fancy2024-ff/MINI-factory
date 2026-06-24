@@ -158,6 +158,9 @@ class PipelineStartRequest(BaseModel):
     platforms: str = "app_store"
     limit: int | None = 10
     max_generate: int = 1
+    # 执行模型：async（默认，正式主路径）= 入队由 worker 异步执行；
+    # sync（兼容/调试）= 旧的请求线程内直起子进程模型，非主路径。
+    execution_mode: Literal["async", "sync"] = "async"
 
 
 class RealAppInput(BaseModel):
@@ -223,19 +226,108 @@ class QueueActionRequest(BaseModel):
     payload: dict = Field(default_factory=dict)
 
 
+class PipelineEnqueueRequest(BaseModel):
+    """把一次生成/抓取/自动流程作为持久化任务入队（生产任务系统）。
+
+    与 /api/pipeline/start 的区别：start 直接起子进程（单进程模型，旧行为保留），
+    enqueue 只写入 task_store，由 task_worker 异步消费（可持久化/重试/取消/优先级）。
+    """
+
+    kind: Literal["pipeline.run", "opportunity.crawl", "pipeline.auto"] = "pipeline.run"
+    priority: int = 100
+    max_attempts: int = 3
+    payload: dict = Field(default_factory=dict)
+
+
+
 # ---------------------------------------------------------------------------
 # SECTION: Pipeline
 # ---------------------------------------------------------------------------
+# 正式执行模型：task queue + task_worker（见 SECTION: Tasks）。API 默认只“入队 +
+# 返回 task_id/job_id”，不在请求线程内直接跑 pipeline。/api/pipeline/start 默认 async；
+# sync 仅兼容/调试。所有入队入口统一走 enqueue_pipeline_task helper（单一实现）。
+
+# pipeline mode → task kind 映射（统一入队语义）。
+_MODE_TO_KIND = {
+    "queue": "pipeline.run",
+    "demo": "pipeline.run",
+    "real": "pipeline.run",
+    "crawl": "opportunity.crawl",
+    "auto": "pipeline.auto",
+}
+
+
+def enqueue_pipeline_task(
+    mode: str,
+    *,
+    regions: str = "",
+    platforms: str = "",
+    limit: int | None = None,
+    max_generate: int = 1,
+    queue_id: str | None = None,
+    job_id: str | None = None,
+    priority: int = 100,
+    max_attempts: int = 3,
+    dedupe_queue_id: bool = False,
+) -> dict:
+    """统一入队 helper：把一次 pipeline 动作（mode）建模成 task 并入 task_store。
+
+    所有 API 入口（start / enqueue / generate_now）都走这里，避免两套分叉实现。
+    - mode→kind 映射见 _MODE_TO_KIND。
+    - payload 带 mode/job_id/queue_id/抓取参数，供 worker + runner 使用。
+    - dedupe_queue_id=True 时（generate_now）：同一 queue_id 已有 active task 则不重复创建，
+      返回 {"reused": True, ...}。
+    返回结构含 task_id / kind / status / job_id / queue_id / reused。
+    """
+    kind = _MODE_TO_KIND.get(mode, "pipeline.run")
+    store = _task_store()
+
+    # 去重：同一 queue item 已有 pending/running 任务时，不重复创建。
+    if dedupe_queue_id and queue_id:
+        existing = store.find_active_by_queue_id(queue_id)
+        if existing is not None:
+            return {
+                "ok": True, "reused": True, "task_id": existing["id"], "kind": existing["kind"],
+                "status": existing["status"], "job_id": existing.get("job_id"),
+                "queue_id": queue_id, "mode": mode,
+            }
+
+    # job_id：queue/demo/real 这类“生成”任务预分配，便于追踪产物目录；crawl 无 job 概念。
+    if job_id is None and kind in ("pipeline.run", "pipeline.auto"):
+        job_id = _generate_job_id()
+
+    payload: dict = {"mode": mode}
+    if job_id:
+        payload["job_id"] = job_id
+    if queue_id:
+        payload["queue_id"] = queue_id
+    if regions:
+        payload["regions"] = regions
+    if platforms:
+        payload["platforms"] = platforms
+    if limit is not None:
+        payload["limit"] = limit
+    if mode == "auto":
+        payload["max_generate"] = max_generate
+
+    task_id = store.enqueue_task(
+        kind=kind, payload=payload, priority=priority, max_attempts=max_attempts,
+        queue_id=queue_id, job_id=job_id,
+    )
+    return {
+        "ok": True, "reused": False, "task_id": task_id, "kind": kind,
+        "status": "pending", "job_id": job_id, "queue_id": queue_id, "mode": mode,
+    }
+
 
 @app.post("/api/pipeline/start", dependencies=[Depends(verify_api_key)])
 async def pipeline_start(req: PipelineStartRequest = PipelineStartRequest()):
-    """Start pipeline in background, return immediately."""
-    global pipeline_process, pipeline_job_id, pipeline_logs
+    """启动一次 pipeline。
 
-    if pipeline_process and pipeline_process.poll() is None:
-        raise HTTPException(409, "Pipeline already running")
-
-    # Validate real mode has data
+    默认 async（正式主路径）：创建 task 并返回 task_id/job_id，由 task_worker 执行。
+    execution_mode=sync 走旧的请求线程内子进程模型（兼容/调试，非主路径）。
+    """
+    # Validate real mode has data (both paths).
     if req.mode == "real":
         apps_file = _real_inputs_file()
         if not apps_file.exists():
@@ -243,6 +335,29 @@ async def pipeline_start(req: PipelineStartRequest = PipelineStartRequest()):
         apps = _read_json(apps_file)
         if not apps:
             raise HTTPException(400, "apps.json is empty. Import at least one app for real mode.")
+
+    # --- 默认异步：入队，由 worker 执行 ---
+    if req.execution_mode == "async":
+        res = enqueue_pipeline_task(
+            req.mode, regions=req.regions, platforms=req.platforms,
+            limit=req.limit, max_generate=req.max_generate,
+        )
+        return {
+            "accepted": True, "execution_mode": "async",
+            "task_id": res["task_id"], "kind": res["kind"], "status": res["status"],
+            "job_id": res.get("job_id"), "queue_id": res.get("queue_id"), "mode": req.mode,
+        }
+
+    # --- 兼容 sync：旧的请求线程内子进程模型（非主路径）---
+    return _pipeline_start_sync(req)
+
+
+def _pipeline_start_sync(req: PipelineStartRequest) -> dict:
+    """旧同步模型：请求线程内直起 runner 子进程并流式 WS。仅兼容/调试，非主路径。"""
+    global pipeline_process, pipeline_job_id, pipeline_logs
+
+    if pipeline_process and pipeline_process.poll() is None:
+        raise HTTPException(409, "Pipeline already running")
 
     # Generate job_id BEFORE starting
     job_id = _generate_job_id()
@@ -281,7 +396,7 @@ async def pipeline_start(req: PipelineStartRequest = PipelineStartRequest()):
 
     asyncio.create_task(_stream_pipeline_output(job_id))
 
-    return {"accepted": True, "job_id": job_id, "mode": req.mode}
+    return {"accepted": True, "execution_mode": "sync", "job_id": job_id, "mode": req.mode}
 
 async def _stream_pipeline_output(job_id: str):
     """Read pipeline stdout line by line, broadcast via WebSocket. Kill on timeout."""
@@ -648,27 +763,155 @@ async def opportunity_queue_action(req: QueueActionRequest):
         oq.save_queue(queue_path, queue)
         return {"ok": True, "action": "retry", "queue_id": req.queue_id, "status": "pending"}
 
-    # generate_now：提权该机会到队首并启动 queue 模式生成（真正执行，不只改状态）。
-    global pipeline_process, pipeline_job_id, pipeline_logs
-    if pipeline_process and pipeline_process.poll() is None:
-        raise HTTPException(409, "Pipeline already running")
-    oq.retry(queue, req.queue_id)        # 确保是 pending
-    oq.prioritize(queue, req.queue_id)   # 提到队首，runner 消费第一个 pending
+    # generate_now：正式走 task queue。提权该机会 + 入队 pipeline.run（定向 queue_id 消费），
+    # 由 worker 执行。同一 queue item 已有 active task 时不重复创建（返回 reused）。
+    oq.retry(queue, req.queue_id)        # 确保是 pending（failed/skipped 也能重新发起）
+    oq.prioritize(queue, req.queue_id)   # 提到队首（普通消费时也优先）
+
+    res = enqueue_pipeline_task(
+        "queue", queue_id=req.queue_id, dedupe_queue_id=True,
+    )
+    # 记录 queue item ↔ task ↔ job 映射，并标记 queued（task 系统已持有它）。
+    oq.mark_queued(queue, req.queue_id, task_id=res["task_id"], job_id=res.get("job_id") or "")
     oq.save_queue(queue_path, queue)
 
-    job_id = _generate_job_id()
-    pipeline_job_id = job_id
-    pipeline_logs.clear()
-    cmd = [sys.executable, "-X", "utf8", str(PIPELINE_RUNNER), "--mode", "queue", "--job-id", job_id]
-    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
-    pipeline_process = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", errors="replace",
-        cwd=str(Path(__file__).parent.parent), env=env,
+    return {
+        "ok": True, "action": "generate_now", "queue_id": req.queue_id,
+        "accepted": True, "reused": res.get("reused", False),
+        "task_id": res["task_id"], "kind": res["kind"], "status": res["status"],
+        "job_id": res.get("job_id"), "mode": "queue",
+    }
+
+
+# ---------------------------------------------------------------------------
+# SECTION: Tasks (persistent task queue — production task system)
+# ---------------------------------------------------------------------------
+# 生产任务系统：持久化 SQLite 队列（core.runtime.task_store），由独立 worker
+# (core.pipeline.task_worker) 异步消费。这些接口只读/管理队列状态，不在请求线程内
+# 执行 pipeline（与 /api/pipeline/start 的单进程模型并存，互不破坏）。
+
+# 任务库路径（None=用 task_store 默认 data/runtime/tasks.sqlite3）。测试可覆盖。
+TASK_DB_PATH: Optional[str] = None
+_task_store_instance = None
+
+
+def _task_store():
+    """惰性构建任务库单例（按 TASK_DB_PATH）。测试改 TASK_DB_PATH 后置空本变量即可重建。"""
+    global _task_store_instance
+    if _task_store_instance is None:
+        from core.runtime.task_store import TaskStore
+        _task_store_instance = TaskStore(TASK_DB_PATH)
+    return _task_store_instance
+
+
+@app.get("/api/tasks/summary", dependencies=[Depends(verify_api_key)])
+def tasks_summary():
+    """任务队列统计（按状态/种类聚合 + 总数）。"""
+    return _task_store().task_summary()
+
+
+@app.get("/api/tasks", dependencies=[Depends(verify_api_key)])
+def list_tasks(
+    status: Optional[str] = Query(default=None),
+    kind: Optional[str] = Query(default=None),
+    queue_id: Optional[str] = Query(default=None),
+    job_id: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """列出任务（最新在前），可按 status / kind / queue_id / job_id 过滤。"""
+    items = _task_store().list_tasks(
+        status=status, kind=kind, queue_id=queue_id, job_id=job_id,
+        limit=limit, offset=offset,
     )
-    asyncio.create_task(_stream_pipeline_output(job_id))
-    return {"ok": True, "action": "generate_now", "queue_id": req.queue_id,
-            "accepted": True, "job_id": job_id, "mode": "queue"}
+    return {"tasks": items, "count": len(items)}
+
+
+@app.get("/api/tasks/by-queue/{queue_id}", dependencies=[Depends(verify_api_key)])
+def list_tasks_by_queue(queue_id: str, limit: int = Query(default=50, ge=1, le=200)):
+    """按 queue_id 列出关联任务（task↔queue item 追踪）。"""
+    items = _task_store().list_tasks(queue_id=queue_id, limit=limit)
+    return {"queue_id": queue_id, "tasks": items, "count": len(items)}
+
+
+@app.get("/api/tasks/by-job/{job_id}", dependencies=[Depends(verify_api_key)])
+def list_tasks_by_job(job_id: str, limit: int = Query(default=50, ge=1, le=200)):
+    """按 job_id 列出关联任务（task↔job 追踪）。"""
+    items = _task_store().list_tasks(job_id=job_id, limit=limit)
+    return {"job_id": job_id, "tasks": items, "count": len(items)}
+
+
+@app.get("/api/tasks/{task_id}", dependencies=[Depends(verify_api_key)])
+def get_task(task_id: str):
+    """单个任务详情。"""
+    task = _task_store().get_task(task_id)
+    if task is None:
+        raise HTTPException(404, "Task not found")
+    return task
+
+
+@app.post("/api/tasks/{task_id}/cancel", dependencies=[Depends(verify_api_key)])
+def cancel_task(task_id: str):
+    """取消任务（pending/running/failed -> cancelled）。终态任务返回当前状态不报错。"""
+    store = _task_store()
+    if store.get_task(task_id) is None:
+        raise HTTPException(404, "Task not found")
+    task = store.cancel_task(task_id)
+    return {"ok": True, "task_id": task_id, "status": task["status"]}
+
+
+@app.post("/api/tasks/{task_id}/retry", dependencies=[Depends(verify_api_key)])
+def retry_task(task_id: str):
+    """手动重试 failed 任务（failed -> pending，重置 attempts）。"""
+    store = _task_store()
+    if store.get_task(task_id) is None:
+        raise HTTPException(404, "Task not found")
+    task = store.retry_task(task_id)
+    return {"ok": True, "task_id": task_id, "status": task["status"]}
+
+
+@app.post("/api/tasks/maintenance/requeue-stale", dependencies=[Depends(verify_api_key)])
+def requeue_stale_tasks():
+    """回收锁过期的 running 任务（worker 崩溃/卡死后处理）。
+
+    返回 requeued（仍有尝试余量、回 pending）与 failed（已达 max_attempts、标 failed）
+    两个计数，避免「pending 却永不被 claim」的误导态。
+    """
+    stats = _task_store().requeue_stale_tasks_detailed()
+    return {"ok": True, "requeued": stats["requeued"], "failed": stats["failed"]}
+
+
+@app.post("/api/pipeline/enqueue", dependencies=[Depends(verify_api_key)])
+def pipeline_enqueue(req: PipelineEnqueueRequest = PipelineEnqueueRequest()):
+    """把一次 pipeline.run / opportunity.crawl / pipeline.auto 作为持久化任务入队。
+
+    与 /api/pipeline/start（默认 async）共享同一执行模型：都进 task_store，由 worker 执行。
+    本接口以 kind+payload 直接表达任务；start 以 mode 表达后映射到 kind。两者最终都落到
+    同一个 task_store.enqueue_task。payload.queue_id / payload.job_id 会提为一等列以便追踪。
+    """
+    store = _task_store()
+    payload = dict(req.payload or {})
+    queue_id = payload.get("queue_id")
+    job_id = payload.get("job_id")
+    # 生成类任务若未带 job_id，预分配一个，保证 task↔job 可追踪。
+    if job_id is None and req.kind in ("pipeline.run", "pipeline.auto"):
+        job_id = _generate_job_id()
+        payload["job_id"] = job_id
+
+    # queue_id 去重：已有 active task 则复用（与 generate_now 一致）。
+    if queue_id:
+        existing = store.find_active_by_queue_id(queue_id)
+        if existing is not None:
+            return {"ok": True, "reused": True, "task_id": existing["id"],
+                    "kind": existing["kind"], "status": existing["status"],
+                    "job_id": existing.get("job_id"), "queue_id": queue_id}
+
+    tid = store.enqueue_task(
+        kind=req.kind, payload=payload, priority=req.priority,
+        max_attempts=req.max_attempts, queue_id=queue_id, job_id=job_id,
+    )
+    return {"ok": True, "reused": False, "task_id": tid, "kind": req.kind,
+            "status": "pending", "job_id": job_id, "queue_id": queue_id}
 
 
 # ---------------------------------------------------------------------------

@@ -166,6 +166,28 @@ describe("generateProject (ai-tool)", () => {
     });
   }
 
+  // P0-1: pet-talk upload 签名页必须接入 mockGenerate 并带 result.id 跳转，
+  // 不能是「等一会儿跳无 id 的 result」断链页，也不能宣称生成视频。
+  it("pet-talk upload page is wired to mockGenerate (no broken result link)", async () => {
+    const res = await generateProject(prd, "pet-talk-viral");
+    const raw = await fs.readFile(
+      path.join(res.project_path, "src/pages/upload/upload.vue"),
+      "utf-8",
+    );
+    // 去 HTML 注释后再校验用户可见/逻辑文案（注释里的口径说明不算违规）。
+    const upload = raw.replace(/<!--[\s\S]*?-->/g, " ");
+    // 接入统一生成入口。
+    expect(upload).toContain("mockGenerate");
+    // 跳转必须带 result.id（不再是无 id 的 /pages/result/result）。
+    expect(upload).toMatch(/result\?id=/);
+    expect(upload).not.toMatch(/navigateTo\(\s*\{\s*url:\s*['"]\/pages\/result\/result['"]\s*\}/);
+    // 不得宣称生成视频。
+    expect(upload).not.toContain("生成说话视频");
+    expect(upload).not.toContain("生成视频");
+    // 照片占位口径明确。
+    expect(upload).toContain("占位");
+  });
+
   // P1: 生成项目交互闭环结构（generation service + 模板配置 + 模板 token 注入）。
   it("ships the generation service and injects selected template", async () => {
     const res = await generateProject(prd, "avatar-viral");
@@ -233,5 +255,47 @@ describe("generateProject (ai-tool)", () => {
     expect(bp.preview_type).toBe("text");
     expect(bp.is_fallback).toBe(true);
   });
+
+  // P0-2 parity: Node 生成的 blueprint.json 必须写入结构化 growth_loop（与 Python 对齐），
+  // 不能 Python 写了、Node 半拉子不写。
+  const GROWTH_LOOP_KEYS = [
+    "has_share_cta", "share_cta_label", "share_title", "share_copy",
+    "has_unlock", "unlock_type", "unlock_hint",
+    "has_watermark", "watermark_label", "remove_watermark_supported",
+    "brand_exposure", "brand_label",
+    "download_supported", "export_supported", "export_label",
+    "capability_mode", "capability_note",
+  ];
+
+  it("writes a complete growth_loop for viral templates (capability_mode=real)", async () => {
+    const res = await generateProject(prd, "avatar-viral");
+    const bp = await fs.readJSON(path.join(res.project_path, "src/config/blueprint.json"));
+    expect(bp.growth_loop, "blueprint.json 缺少 growth_loop").toBeTruthy();
+    for (const k of GROWTH_LOOP_KEYS) {
+      expect(k in bp.growth_loop, `growth_loop 缺键 ${k}`).toBe(true);
+    }
+    // 核心模板 capability_mode 必须 real
+    expect(bp.growth_loop.capability_mode).toBe("real");
+  });
+
+  it("writes growth_loop with capability_mode=fallback_preview for video boundary templates", async () => {
+    for (const template of ["funny-video-viral", "blessing-video-viral"]) {
+      const res = await generateProject(prd, template);
+      const bp = await fs.readJSON(path.join(res.project_path, "src/config/blueprint.json"));
+      expect(bp.growth_loop, `${template} 缺 growth_loop`).toBeTruthy();
+      expect(bp.growth_loop.capability_mode).toBe("fallback_preview");
+    }
+  });
+
+  it("writes a generic growth_loop even for fallback (ai-tool) templates", async () => {
+    const res = await generateProject(prd, "ai-tool");
+    const bp = await fs.readJSON(path.join(res.project_path, "src/config/blueprint.json"));
+    expect(bp.growth_loop, "兜底模板也必须有 growth_loop").toBeTruthy();
+    for (const k of GROWTH_LOOP_KEYS) {
+      expect(k in bp.growth_loop, `fallback growth_loop 缺键 ${k}`).toBe(true);
+    }
+    expect(bp.growth_loop.capability_mode).toBe("fallback_preview");
+  });
 });
+
 

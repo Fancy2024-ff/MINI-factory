@@ -60,6 +60,63 @@ def test_queue_mode_empty_raises(tmp_path, monkeypatch):
         runner.load_market_input(mode="queue")
 
 
+def _seed_multi(opp, monkeypatch):
+    """写一个多 item 队列（不同顺序/状态），返回路径。"""
+    queue = [
+        {"queue_id": "Q-1", "feature_key": "app_store:1:a", "parent_app_key": "app_store:1",
+         "parent_app_name": "AppOne", "feature_name_cn": "功能一",
+         "selected_template": "ai-image", "status": "pending"},
+        {"queue_id": "Q-2", "feature_key": "app_store:2:b", "parent_app_key": "app_store:2",
+         "parent_app_name": "AppTwo", "feature_name_cn": "功能二",
+         "selected_template": "avatar-viral", "status": "pending"},
+        {"queue_id": "Q-3", "feature_key": "app_store:3:c", "parent_app_key": "app_store:3",
+         "parent_app_name": "AppThree", "feature_name_cn": "功能三",
+         "selected_template": "ai-image", "status": "failed", "retry_count": 1},
+    ]
+    (opp / "opportunity-queue.json").write_text(
+        json.dumps(queue, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(runner, "OPPORTUNITY_DIR", opp)
+    runner._active_queue_item = None
+
+
+def test_targeted_queue_id_consumes_only_that_item(tmp_path, monkeypatch):
+    """定向 queue mode：指定 queue_id 只消费目标 item，不消费队首。"""
+    opp = tmp_path / "opportunity"
+    opp.mkdir(parents=True)
+    _seed_multi(opp, monkeypatch)
+    apps = runner.load_market_input(mode="queue", queue_id="Q-2")
+    assert len(apps) == 1
+    assert apps[0]["source_queue_id"] == "Q-2"
+    assert apps[0]["selected_template"] == "avatar-viral"
+    assert runner._active_queue_item["queue_id"] == "Q-2"
+
+
+def test_targeted_queue_id_can_consume_failed(tmp_path, monkeypatch):
+    """定向消费允许 failed item（重新发起生成）。"""
+    opp = tmp_path / "opportunity"
+    opp.mkdir(parents=True)
+    _seed_multi(opp, monkeypatch)
+    apps = runner.load_market_input(mode="queue", queue_id="Q-3")
+    assert apps[0]["source_queue_id"] == "Q-3"
+
+
+def test_targeted_unknown_queue_id_raises(tmp_path, monkeypatch):
+    opp = tmp_path / "opportunity"
+    opp.mkdir(parents=True)
+    _seed_multi(opp, monkeypatch)
+    with pytest.raises(ValueError):
+        runner.load_market_input(mode="queue", queue_id="NOPE")
+
+
+def test_plain_queue_mode_still_consumes_first_pending(tmp_path, monkeypatch):
+    """未指定 queue_id 时仍消费下一个 pending（兼容旧行为）。"""
+    opp = tmp_path / "opportunity"
+    opp.mkdir(parents=True)
+    _seed_multi(opp, monkeypatch)
+    apps = runner.load_market_input(mode="queue")
+    assert apps[0]["source_queue_id"] == "Q-1"  # 第一个 pending
+
+
 def test_update_queue_after_success(queue_env):
     runner.load_market_input(mode="queue")  # sets _active_queue_item
     runner._update_queue_after_run("job-xyz", success=True)

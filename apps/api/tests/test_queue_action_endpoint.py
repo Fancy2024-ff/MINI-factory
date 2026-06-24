@@ -79,33 +79,50 @@ def test_queue_action_invalid_action_422(server_client, auth_headers):
     assert res.status_code == 422  # Literal 校验失败
 
 
-def test_generate_now_prioritizes_and_launches(server_client, auth_headers, monkeypatch):
+def test_generate_now_enqueues_task(server_client, auth_headers):
+    """generate_now 正式走 task queue：入队 pipeline.run，并把 queue_id 放进 task/payload。"""
     client, api = server_client
     opp = _seed_queue(api, _queue())
-
-    # 不真正起子进程：mock Popen + 流式任务
-    class _FakeProc:
-        def poll(self):
-            return None
-        returncode = 0
-
-    monkeypatch.setattr(api.subprocess, "Popen", lambda *a, **k: _FakeProc())
-
-    async def _noop(job_id):
-        return None
-    monkeypatch.setattr(api, "_stream_pipeline_output", _noop)
 
     res = client.post("/api/opportunities/queue/action", headers=auth_headers,
                       json={"action": "generate_now", "queue_id": "q-002"})
     assert res.status_code == 200
     body = res.json()
     assert body["ok"] is True and body["accepted"] is True and body["mode"] == "queue"
-    # q-002 被提到队首且为 pending（runner 会消费第一个 pending）
+    assert body["reused"] is False
+    assert body["kind"] == "pipeline.run" and body["status"] == "pending"
+    task_id = body["task_id"]
+
+    # task 已入 task_store，queue_id 提为一等列 + 进 payload
+    task = api._task_store().get_task(task_id)
+    assert task is not None
+    assert task["kind"] == "pipeline.run"
+    assert task["queue_id"] == "q-002"
+    assert task["payload"]["queue_id"] == "q-002"
+    assert task["payload"]["mode"] == "queue"
+
+    # q-002 被提到队首，且标为 queued（task 系统持有它），记录了 task_id/job_id
     queue = json.loads((opp / "opportunity-queue.json").read_text(encoding="utf-8"))
     assert queue[0]["queue_id"] == "q-002"
-    assert queue[0]["status"] == "pending"
-    # 清理：避免 fake proc 影响 teardown
-    api.pipeline_process = None
+    assert queue[0]["status"] == "queued"
+    assert queue[0]["task_id"] == task_id
+
+
+def test_generate_now_dedupes_active_task(server_client, auth_headers):
+    """同一 queue item 已有 active task 时，再次 generate_now 不重复创建，返回 reused。"""
+    client, api = server_client
+    _seed_queue(api, _queue())
+
+    r1 = client.post("/api/opportunities/queue/action", headers=auth_headers,
+                     json={"action": "generate_now", "queue_id": "q-001"}).json()
+    r2 = client.post("/api/opportunities/queue/action", headers=auth_headers,
+                     json={"action": "generate_now", "queue_id": "q-001"}).json()
+    assert r1["reused"] is False
+    assert r2["reused"] is True
+    assert r2["task_id"] == r1["task_id"]
+    # 只创建了一个 task
+    tasks = api._task_store().list_tasks(queue_id="q-001")
+    assert len(tasks) == 1
 
 
 def test_wechat_upload_no_dist_fails_cleanly(server_client, auth_headers):

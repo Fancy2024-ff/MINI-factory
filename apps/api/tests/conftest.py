@@ -38,6 +38,9 @@ def server_client(monkeypatch, tmp_path):
     api.PLATFORMS_DIR = tmp_path / "platforms"
     api.PLATFORM_AUTH_DIR.mkdir(parents=True, exist_ok=True)
     api.PLATFORMS_DIR.mkdir(parents=True, exist_ok=True)
+    # 隔离任务库，避免污染真实 data/runtime/tasks.sqlite3
+    api.TASK_DB_PATH = str(tmp_path / "tasks.sqlite3")
+    api._task_store_instance = None
 
     from fastapi.testclient import TestClient
 

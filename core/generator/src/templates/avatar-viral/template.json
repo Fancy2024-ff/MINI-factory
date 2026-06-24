@@ -3,7 +3,7 @@
   "name_cn": "AI头像",
   "name_en": "AI Avatar",
   "category": "viral",
-  "description": "上传一张照片，一键生成多风格 AI 头像，分享解锁高清无水印版。",
+  "description": "输入风格关键词，一键生成多风格 AI 头像，分享解锁高清无水印版。",
   "preview_type": "avatar",
   "template_status": "core_runnable",
   "status_label": "核心可跑通",
@@ -38,10 +38,11 @@
   "input_fields": [
     {
       "id": "photo",
-      "label": "上传照片",
+      "label": "参考照片（占位，暂不参与生成）",
       "type": "image",
       "required": false,
-      "placeholder": "点击上传一张清晰正脸照（占位，可选）"
+      "placeholder": "可上传占位，当前生成以下方风格描述为准",
+      "drives_generation": false
     },
     {
       "id": "style",

@@ -3,18 +3,26 @@
 职责：
   1. 增长产物齐全（growth-plan.md / share-strategy.md / viral-score.json）；
   2. growth/share 文档含必要裂变要素（分享钩子、激励、裂变回环、去水印）；
-  3. 生成的小程序代码本身含传播链路：分享 CTA、解锁/裂变机制、品牌露出位。
+  3. 生成的小程序代码本身含传播链路：分享 CTA、解锁/裂变机制、品牌露出位；
+  4. 传播闭环产品化分层（P0-2）：区分「只有文档 / 有传播设计 / 结果页真接入」——
+     blueprint.growth_loop -> generation.ts 消费 -> result.vue 展示，三层都到位才算产品化。
 规则版 v1。
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 # 生成代码中传播链路信号（命中即视为该传播位已预留）
 _SHARE_CTA = ["分享", "share", "转发", "晒"]
 _UNLOCK_HOOK = ["解锁", "unlock", "邀请", "invite", "去水印", "watermark", "高清"]
 _RESULT_PAGE = ["result", "gallery", "pack", "clip", "greeting", "preview", "结果", "作品"]
+
+# 视频边界型模板（必须诚实标注 preview / fallback，不得冒充真实视频生成）
+_VIDEO_PREVIEW_TEMPLATES = {"funny-video-viral", "blessing-video-viral"}
+# 核心可跑通模板（必须为 real，不得被标成 fallback_preview）
+_CORE_RUNNABLE_TEMPLATES = {"avatar-viral", "sticker-viral", "pet-talk-viral"}
 
 
 def _scan_generated(miniapp_dir: Path, words: list[str]) -> bool:
@@ -114,6 +122,116 @@ def _check_generation_flow(miniapp_dir: Path, checks: dict, issues: list[str]) -
         issues.append("生成服务缺少 template-aware mock 逻辑或结果契约字段")
 
 
+def _check_growth_loop_productization(miniapp_dir: Path, checks: dict, issues: list[str]) -> None:
+    """传播闭环产品化分层检查（P0-2 核心）。
+
+    区分三层：
+      1. 只有文档：blueprint 无 growth_loop -> growth_loop_in_blueprint=False（未产品化）；
+      2. 有传播设计：blueprint 有 growth_loop，但 generation.ts/result.vue 没消费/展示
+         -> generation_consumes_growth_loop / result_displays_growth_loop=False（设计存在但产品层未接入）；
+      3. 真接入：blueprint + generation.ts + result.vue 三层都到位 -> 全 True。
+
+    并按模板能力诚实度校验：
+      - funny/blessing：result/blueprint 必须出现 fallback_preview / preview mode 文案；
+      - avatar/sticker/pet-talk：不得被标成 fallback_preview。
+    """
+    src = miniapp_dir / "src"
+    blueprint_path = src / "config" / "blueprint.json"
+    service_txt = _read(src / "services" / "generation.ts")
+    result_txt = _read(src / "pages" / "result" / "result.vue")
+
+    bp: dict = {}
+    try:
+        if blueprint_path.exists():
+            bp = json.loads(blueprint_path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        bp = {}
+    gl = bp.get("growth_loop") if isinstance(bp, dict) else None
+    gl = gl if isinstance(gl, dict) else {}
+
+    # 第 1 层：blueprint 含结构化 growth_loop
+    gl_in_bp = bool(gl)
+    checks["growth_loop_in_blueprint"] = gl_in_bp
+    if not gl_in_bp:
+        issues.append("传播闭环未产品化：blueprint.json 缺少 growth_loop 结构（仅文档层）")
+
+    # 第 2 层：generation.ts 消费 growth_loop（GeneratedResult 透传字段）
+    consumes = (
+        "growthLoop" in service_txt
+        and "capabilityMode" in service_txt
+        and "removeWatermarkSupported" in service_txt
+    )
+    checks["generation_consumes_growth_loop"] = consumes
+    if not consumes:
+        issues.append("传播设计存在但产品层未接入：generation.ts 未消费 growth_loop（growthLoop/capabilityMode/removeWatermarkSupported）")
+
+    # 第 3 层：result.vue 展示传播闭环各状态
+    r_growth = ("growthLoop" in result_txt) or ("传播闭环" in result_txt) or ("Growth Loop" in result_txt)
+    r_share = ("shareCtaLabel" in result_txt) or ("分享 CTA" in result_txt) or ("open-type=\"share\"" in result_txt)
+    r_unlock = ("hasUnlock" in result_txt) or ("unlockHint" in result_txt) or ("解锁机制" in result_txt)
+    r_watermark = ("watermarkLabel" in result_txt) or ("水印" in result_txt)
+    r_remove = ("removeWatermarkSupported" in result_txt) or ("去水印" in result_txt)
+    r_brand = ("brandExposure" in result_txt) or ("brandLabel" in result_txt) or ("品牌露出" in result_txt)
+    r_export = ("exportSupported" in result_txt) or ("exportLabel" in result_txt) or ("导出" in result_txt)
+    r_capability = ("capabilityMode" in result_txt) or ("当前能力" in result_txt) or ("isPreviewMode" in result_txt)
+
+    checks["result_displays_growth_loop"] = r_growth
+    checks["result_displays_share_cta"] = r_share
+    checks["result_displays_unlock"] = r_unlock
+    checks["result_displays_watermark"] = r_watermark
+    checks["result_displays_remove_watermark"] = r_remove
+    checks["result_displays_brand"] = r_brand
+    checks["result_displays_export"] = r_export
+    checks["capability_mode_visible"] = r_capability
+
+    if not r_growth:
+        issues.append("结果页未展示传播闭环（result.vue 缺少 growthLoop / 传播闭环区域）")
+    if not r_share:
+        issues.append("结果页未展示分享 CTA（shareCtaLabel/分享 CTA）")
+    if not r_unlock:
+        issues.append("结果页未展示解锁机制（unlockHint/解锁机制）")
+    if not r_watermark:
+        issues.append("结果页未展示水印（watermarkLabel/水印）")
+    if not r_remove:
+        issues.append("结果页未展示去水印状态（removeWatermark/去水印）")
+    if not r_brand:
+        issues.append("结果页未展示品牌露出（brandExposure/品牌露出）")
+    if not r_export:
+        issues.append("结果页未展示下载/导出状态（exportSupported/导出）")
+    if not r_capability:
+        issues.append("结果页未展示能力模式（capabilityMode/当前能力/预览模式）")
+
+    # 诚实度：视频边界型必须出现 fallback_preview / preview mode 文案
+    template_id = bp.get("template_id", "") if isinstance(bp, dict) else ""
+    is_video_preview = template_id in _VIDEO_PREVIEW_TEMPLATES or gl.get("capability_mode") == "fallback_preview"
+    fallback_visible = (
+        "fallback_preview" in result_txt
+        or "preview mode" in result_txt.lower()
+        or "预览模式" in result_txt
+        or "honest fallback" in result_txt
+    )
+    if template_id in _VIDEO_PREVIEW_TEMPLATES:
+        checks["fallback_preview_visible_for_video_templates"] = fallback_visible
+        if not fallback_visible:
+            issues.append(f"视频边界型模板 {template_id} 结果页缺少 fallback/preview 诚实标注（疑似伪装真实视频）")
+        # 视频边界型不得在事实源里被标成 real
+        if gl and gl.get("capability_mode") == "real":
+            checks["video_template_not_faked_real"] = False
+            issues.append(f"视频边界型模板 {template_id} 的 growth_loop.capability_mode 被标成 real（伪装真实视频）")
+        else:
+            checks["video_template_not_faked_real"] = True
+    elif is_video_preview:
+        # 兜底/通用 preview 模式也要可见
+        checks["fallback_preview_visible_for_video_templates"] = fallback_visible
+
+    # 核心模板不得被标成 fallback_preview
+    if template_id in _CORE_RUNNABLE_TEMPLATES:
+        not_faked = gl.get("capability_mode") != "fallback_preview"
+        checks["core_template_not_downgraded"] = not_faked
+        if not not_faked:
+            issues.append(f"核心可跑通模板 {template_id} 被标成 fallback_preview（能力口径错误）")
+
+
 def run_growth_qa(output_dir: Path, miniapp_dir: Path | None = None) -> dict:
     """检查 growth 产物完整性、关键要素，以及生成代码的传播+交互闭环。"""
     issues: list[str] = []
@@ -175,6 +293,9 @@ def run_growth_qa(output_dir: Path, miniapp_dir: Path | None = None) -> dict:
 
         # 5. 生成项目的交互闭环结构（generation service / result / form / 模板感知）
         _check_generation_flow(miniapp_dir, checks, issues)
+
+        # 6. 传播闭环产品化分层（P0-2）：blueprint -> generation.ts -> result.vue 三层接入
+        _check_growth_loop_productization(miniapp_dir, checks, issues)
 
     passed = all(checks.values())
     return {"passed": passed, "checks": checks, "issues": issues}

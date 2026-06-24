@@ -1,4 +1,4 @@
-import type { JobSummary, JobDetail, OpportunitySummary, PipelineMode } from '../types/job'
+import type { JobSummary, JobDetail, OpportunitySummary, PipelineMode, TaskItem, TaskSummary, QueueActionResult } from '../types/job'
 
 const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 const WS_BASE = import.meta.env.VITE_WS_BASE_URL || 'ws://localhost:8000'
@@ -72,10 +72,30 @@ export const api = {
   getOpportunityCandidates: () => get<{ items: any[]; total: number }>('/api/opportunities/candidates'),
   getOpportunityFeatures: () => get<{ items: any[]; total: number }>('/api/opportunities/features'),
   queueAction: (action: 'prioritize' | 'skip' | 'retry' | 'generate_now', queueId: string, payload: any = {}) =>
-    post<{ ok: boolean; action: string; queue_id: string; status?: string; job_id?: string }>(
+    post<QueueActionResult>(
       '/api/opportunities/queue/action',
       { action, queue_id: queueId, payload },
     ),
+  // 生产任务系统（只读 + cancel/retry）。底层逻辑在 core.runtime/task_worker，前端不碰。
+  getTasks: (params: { status?: string; kind?: string; queue_id?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.status) qs.set('status', params.status)
+    if (params.kind) qs.set('kind', params.kind)
+    if (params.queue_id) qs.set('queue_id', params.queue_id)
+    if (params.limit) qs.set('limit', String(params.limit))
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return get<{ tasks: TaskItem[]; count: number }>(`/api/tasks${suffix}`)
+  },
+  getTaskSummary: () => get<TaskSummary>('/api/tasks/summary'),
+  getTask: (id: string) => get<TaskItem>(`/api/tasks/${encodeURIComponent(id)}`),
+  getTasksByQueue: (queueId: string) =>
+    get<{ queue_id: string; tasks: TaskItem[]; count: number }>(
+      `/api/tasks/by-queue/${encodeURIComponent(queueId)}`,
+    ),
+  cancelTask: (id: string) =>
+    post<{ ok: boolean; task_id: string; status: string }>(`/api/tasks/${encodeURIComponent(id)}/cancel`),
+  retryTask: (id: string) =>
+    post<{ ok: boolean; task_id: string; status: string }>(`/api/tasks/${encodeURIComponent(id)}/retry`),
   getRealInputs: () => get<{ apps: any[]; exists: boolean }>('/api/real-inputs/apps'),
   saveRealInputs: (apps: any[]) => post('/api/real-inputs/apps', apps),
   getPlatforms: () => get<{ platforms: any[]; total: number }>('/api/platforms'),

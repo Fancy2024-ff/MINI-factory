@@ -3,7 +3,7 @@
   "name_cn": "AI图片工具",
   "name_en": "AI Image Tool",
   "category": "ai-tool",
-  "description": "输入描述或上传图片，生成/处理图片结果，分享解锁高清无水印版。",
+  "description": "输入描述，生成图片结果，分享解锁高清无水印版。",
   "preview_type": "image",
   "template_status": "core_runnable",
   "status_label": "核心可跑通",
@@ -24,10 +24,11 @@
     },
     {
       "id": "source_image",
-      "label": "上传原图",
+      "label": "参考原图（占位，暂不参与生成）",
       "type": "image",
       "required": false,
-      "placeholder": "点击上传待处理图片（占位，可选）"
+      "placeholder": "可上传占位，当前生成以上方描述为准",
+      "drives_generation": false
     }
   ],
   "result_fields": [

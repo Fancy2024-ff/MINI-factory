@@ -18,6 +18,23 @@ const templateSelection = computed(() => {
   return props.job?.artifacts?.['template-selection.json'] || null
 })
 
+// 传播闭环摘要（来自 generator-source.json.growth_loop / growth_loop_summary，P0-2）。
+const growthLoop = computed<Record<string, any>>(() => {
+  const gs: any = props.job?.artifacts?.['generator-source.json']
+  return gs?.growth_loop || {}
+})
+const growthLoopSummary = computed<Record<string, any>>(() => {
+  const gs: any = props.job?.artifacts?.['generator-source.json']
+  return gs?.growth_loop_summary || gs?.codegen_report || {}
+})
+const hasGrowthLoop = computed(() =>
+  !!growthLoopSummary.value?.growth_loop_present || !!Object.keys(growthLoop.value).length,
+)
+const isPreviewMode = computed(() => {
+  const mode = growthLoop.value?.capability_mode || growthLoopSummary.value?.capability_mode
+  return mode === 'fallback_preview'
+})
+
 const pipelineReport = computed(() => {
   return props.job?.artifacts?.['pipeline-report.json'] || null
 })
@@ -108,6 +125,36 @@ const nextActions = computed(() => {
         </div>
       </div>
       <div v-else class="card-empty">暂无数据</div>
+    </div>
+
+    <!-- Card 1c: Growth Loop Impact（传播闭环影响） -->
+    <div class="card" data-testid="growth-loop-card">
+      <h3 class="card-title">传播闭环影响</h3>
+      <div v-if="hasGrowthLoop" class="card-body">
+        <div class="gl-share-title" v-if="growthLoop.share_title">{{ growthLoop.share_title }}</div>
+        <div class="gl-share-copy" v-if="growthLoop.share_copy">{{ growthLoop.share_copy }}</div>
+        <div class="gl-lines">
+          <div class="gl-line" v-if="growthLoop.unlock_hint">
+            <span class="gl-line-key">解锁</span><span>{{ growthLoop.unlock_hint }}</span>
+          </div>
+          <div class="gl-line">
+            <span class="gl-line-key">水印 / 去水印</span>
+            <span>{{ (growthLoopSummary.has_watermark ?? growthLoop.has_watermark) ? '有水印' : '无水印' }}
+              · {{ (growthLoopSummary.remove_watermark_supported ?? growthLoop.remove_watermark_supported) ? '支持去水印' : '暂不支持' }}</span>
+          </div>
+          <div class="gl-line">
+            <span class="gl-line-key">导出</span>
+            <span>{{ (growthLoopSummary.export_supported ?? growthLoop.export_supported) ? (growthLoop.export_label || '支持导出') : '导出入口已预留' }}</span>
+          </div>
+        </div>
+        <div class="gl-capability" :class="isPreviewMode ? 'gl-capability--preview' : 'gl-capability--real'">
+          {{ isPreviewMode ? 'fallback_preview · 预览模式' : 'real · 真实生成' }}
+        </div>
+        <div class="gl-preview-hint" v-if="isPreviewMode">
+          ⚠ 当前为预览/脚本/卡片结果，非真实视频生成；分享与导出的是预览结果。
+        </div>
+      </div>
+      <div v-else class="card-empty">暂无传播闭环数据</div>
     </div>
 
     <!-- Card 2: Completion Checklist -->
@@ -246,6 +293,17 @@ const nextActions = computed(() => {
 .dim-label { color: var(--color-text-3); margin-right: 4px; }
 .dim-value { color: var(--color-text-1); font-weight: 500; }
 .template-line { margin-top: 12px; font-size: 12px; color: var(--color-text-2); }
+
+/* Growth Loop Impact */
+.gl-share-title { font-size: 14px; font-weight: 600; color: var(--color-text-1); margin-bottom: 4px; }
+.gl-share-copy { font-size: 12px; color: var(--color-text-2); margin-bottom: 10px; line-height: 1.5; }
+.gl-lines { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+.gl-line { display: flex; gap: 8px; font-size: 12px; color: var(--color-text-1); }
+.gl-line-key { color: var(--color-text-3); flex-shrink: 0; min-width: 72px; }
+.gl-capability { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: 980px; }
+.gl-capability--real { background: var(--color-green-subtle); color: #166534; }
+.gl-capability--preview { background: var(--color-orange-subtle); color: #92400e; }
+.gl-preview-hint { margin-top: 8px; font-size: 11px; color: #a8071a; line-height: 1.5; }
 
 /* Checklist */
 .checklist { display: flex; flex-direction: column; gap: 4px; }

@@ -342,3 +342,150 @@ def test_result_page_shows_template_status(generated):
     assert "真实生成" in result
     assert "honest fallback" in result
     assert "templateStatus" in result
+
+
+def test_result_page_renders_real_image_block(generated):
+    """result.vue 必须有通用真实图片渲染块（hasRealImage），让 avatar/sticker/petVideo
+    真实生成图可见，而不是只把真实结果存进 storage。"""
+    miniapp_dir, _ = generated
+    result = (miniapp_dir / "src" / "pages" / "result" / "result.vue").read_text(encoding="utf-8")
+    assert "hasRealImage" in result, "result.vue 缺少通用真实图片渲染判断"
+    # 通用块对 image_base64 也兜底渲染
+    assert "image_base64" in result
+
+
+def test_result_page_video_boundary_text_is_guarded(generated):
+    """「真实视频生成是后续能力边界」文案必须被 isVideoBoundaryTemplate 守卫，
+    不允许对所有非核心结果无条件展示视频边界提示；通用提示优先用 boundaryNote。"""
+    miniapp_dir, _ = generated
+    result = (miniapp_dir / "src" / "pages" / "result" / "result.vue").read_text(encoding="utf-8")
+    assert "isVideoBoundaryTemplate" in result, "缺少视频边界型模板守卫"
+    assert "funny-video-viral" in result and "blessing-video-viral" in result
+    # 视频边界文案只在 isVideoBoundaryTemplate computed 内部出现，非模板顶层无条件渲染。
+    assert "nonCoreHint" in result
+    # 顶层 boundary-note 用 nonCoreHint，而不是写死视频文案
+    assert "{{ nonCoreHint }}" in result
+
+
+# --- 传播闭环 growth_loop 贯穿（P0-2）---
+
+
+def test_blueprint_json_carries_growth_loop(sample_app, sample_prd, tmp_path):
+    """生成 avatar-viral 后 blueprint.json 必须含完整 growth_loop。"""
+    miniapp_dir, _ = generate_miniapp(sample_app, sample_prd, tmp_path, template="avatar-viral")
+    bp = json.loads((miniapp_dir / "src" / "config" / "blueprint.json").read_text(encoding="utf-8"))
+    assert "growth_loop" in bp, "blueprint.json 缺少 growth_loop"
+    gl = bp["growth_loop"]
+    for k in ("has_share_cta", "share_cta_label", "unlock_type", "watermark_label",
+              "remove_watermark_supported", "brand_label", "export_label", "capability_mode"):
+        assert k in gl, f"blueprint.json growth_loop 缺键 {k}"
+    assert gl["capability_mode"] == "real"
+
+
+def test_generation_ts_consumes_growth_loop(generated):
+    """generation.ts 必须消费 growth_loop（GeneratedResult 透传字段）。"""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "services" / "generation.ts").read_text(encoding="utf-8")
+    for token in ("growthLoop", "shareCtaLabel", "removeWatermarkSupported",
+                  "capabilityMode", "exportSupported", "brandExposure"):
+        assert token in txt, f"generation.ts 缺少 growth_loop 字段 {token}"
+    # 三条路径共用的事实源映射函数
+    assert "growthFields" in txt
+
+
+def test_result_vue_displays_growth_loop(generated):
+    """result.vue 必须展示传播闭环各状态。"""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "pages" / "result" / "result.vue").read_text(encoding="utf-8")
+    assert "传播闭环" in txt or "Growth Loop" in txt
+    assert "shareCtaLabel" in txt
+    assert "removeWatermarkSupported" in txt
+    assert "brandExposure" in txt or "brandLabel" in txt
+    assert "exportSupported" in txt
+    assert "capabilityMode" in txt or "isPreviewMode" in txt
+
+
+def test_result_vue_export_is_real_not_placeholder_toast(generated):
+    """result.vue 的导出必须是真实行为（存相册 / 复制文本），不再只是「入口已预留」toast（finding #1）。"""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "pages" / "result" / "result.vue").read_text(encoding="utf-8")
+    # 真实导出能力：远程图存相册 + 文本复制剪贴板。
+    assert "saveImageToPhotosAlbum" in txt, "导出未实现存相册"
+    assert "downloadFile" in txt, "导出未实现下载远程图"
+    assert "setClipboardData" in txt, "导出未实现文本复制"
+    # handleExport 不得是「只 toast 入口已预留」的占位实现。
+    assert "已保存到相册" in txt or "已复制到剪贴板" in txt
+
+
+def test_result_vue_watermark_and_cta_gated_by_facts(generated):
+    """result.vue 分享/解锁/水印必须由事实源字段驱动，而非永远显示（finding #6）。"""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "pages" / "result" / "result.vue").read_text(encoding="utf-8")
+    # 分享 CTA 受 hasShareCta 控制。
+    assert "hasShareCta" in txt
+    # 解锁/去水印受 hasUnlock + removeWatermarkSupported 控制。
+    assert "canRemoveWatermark" in txt or "removeWatermarkSupported" in txt
+    assert "hasUnlock" in txt
+
+
+def test_generation_ts_downgrades_growthloop_on_apifail(generated):
+    """generation.ts 必须在 API 失败时整体降级 growthLoop（finding #2）。"""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "services" / "generation.ts").read_text(encoding="utf-8")
+    assert "downgradeGrowthLoopForFallback" in txt
+    # 水印初始态来自事实源 has_watermark，而非硬编码 true（finding #6）。
+    assert "has_watermark !== false" in txt
+
+
+def test_generation_ts_mock_runtime_local_preview(generated):
+    """generation.ts 必须在 mock 运行模式下把核心模板降级为本地预览（finding #2）。"""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "services" / "generation.ts").read_text(encoding="utf-8")
+    assert "buildLocalPreviewFallback" in txt, "缺少本地预览降级函数"
+    assert "local_preview" in txt and "mock_preview" in txt
+    # base64-only 导出降级（finding #1）。
+    assert "downgradeExportForBase64Only" in txt
+    # 导出能力判定纯函数（finding #3 行为级）。
+    assert "classifyExportTarget" in txt and "buildExportText" in txt
+
+
+def test_result_vue_export_uses_classifier(generated):
+    """result.vue 导出必须走 classifyExportTarget（与单测同源），且按路径判定（finding #3）。"""
+    miniapp_dir, _ = generated
+    txt = (miniapp_dir / "src" / "pages" / "result" / "result.vue").read_text(encoding="utf-8")
+    assert "classifyExportTarget" in txt
+    # 导出按钮受真实导出路径 canExport 约束，不只看 exportSupported。
+    assert "canExport" in txt
+
+
+def test_gen_source_has_growth_loop_summary(generated):
+    """generator-source.json（gen_source）必须含 growth_loop 摘要字段。"""
+    _, gen_source = generated
+    assert "growth_loop_summary" in gen_source
+    summ = gen_source["growth_loop_summary"]
+    for k in ("growth_loop_present", "has_share_cta", "has_unlock", "has_watermark",
+              "remove_watermark_supported", "brand_exposure", "download_supported",
+              "export_supported", "capability_mode"):
+        assert k in summ, f"growth_loop_summary 缺键 {k}"
+    # codegen_report 也带摘要
+    report = gen_source["codegen_report"]
+    assert "growth_loop_present" in report
+    assert "capability_mode" in report
+
+
+@pytest.mark.parametrize("template", CORE_RUNNABLE)
+def test_core_template_growth_loop_real(template, sample_app, sample_prd, tmp_path):
+    """核心模板生成后 growth_loop / 摘要 capability_mode 必须为 real。"""
+    miniapp_dir, gen_source = generate_miniapp(sample_app, sample_prd, tmp_path, template=template)
+    bp = json.loads((miniapp_dir / "src" / "config" / "blueprint.json").read_text(encoding="utf-8"))
+    assert bp["growth_loop"]["capability_mode"] == "real"
+    assert gen_source["growth_loop_summary"]["capability_mode"] == "real"
+
+
+@pytest.mark.parametrize("template", HONEST_PREVIEW)
+def test_video_template_growth_loop_fallback_preview(template, sample_app, sample_prd, tmp_path):
+    """funny/blessing 生成后 growth_loop.capability_mode 必须为 fallback_preview（不伪装真实视频）。"""
+    miniapp_dir, gen_source = generate_miniapp(sample_app, sample_prd, tmp_path, template=template)
+    bp = json.loads((miniapp_dir / "src" / "config" / "blueprint.json").read_text(encoding="utf-8"))
+    assert bp["growth_loop"]["capability_mode"] == "fallback_preview"
+    assert gen_source["growth_loop_summary"]["capability_mode"] == "fallback_preview"

@@ -210,10 +210,12 @@ def _normalize_app(app: dict) -> dict:
     return app
 
 
-def load_market_input(mode: str = "queue") -> list[dict]:
+def load_market_input(mode: str = "queue", queue_id: str | None = None) -> list[dict]:
     """读取 App 数据。
 
     正式：queue=从 opportunity-queue 消费 feature 级机会（主链路）。
+    - 普通 queue mode（queue_id=None）：消费下一个 pending item（兼容旧行为）。
+    - 定向 queue mode（queue_id 指定）：只消费该 queue_id 对应的 item，不碰其它。
     dev-only：demo=样例数据（仅本地开发/测试，非主流程）。
     legacy/dev-only：real=手动导入 data/inputs/real（兼容旧 API 测试，非主流程）。
     注意：旧 live 模式已移除；实时抓取统一走 core.opportunity.crawl_runner。
@@ -223,12 +225,20 @@ def load_market_input(mode: str = "queue") -> list[dict]:
         from core.opportunity import opportunity_queue as oq
 
         queue = oq.load_queue(OPPORTUNITY_DIR / "opportunity-queue.json")
-        item = oq.pop_next_pending(queue)
-        if item is None:
-            raise ValueError(
-                "opportunity-queue.json 无 pending 项。先跑 "
-                "python -m core.opportunity.crawl_runner --mode once（或 --mode auto）生成队列。"
-            )
+        if queue_id:
+            # 定向消费：只认指定 queue_id，命中可消费状态才用。
+            item = oq.find_consumable(queue, queue_id)
+            if item is None:
+                raise ValueError(
+                    f"queue_id={queue_id} 不存在或不可消费（需 pending/queued/failed）。"
+                )
+        else:
+            item = oq.pop_next_pending(queue)
+            if item is None:
+                raise ValueError(
+                    "opportunity-queue.json 无 pending 项。先跑 "
+                    "python -m core.opportunity.crawl_runner --mode once（或 --mode auto）生成队列。"
+                )
         global _active_queue_item
         _active_queue_item = item
         app_input = oq.queue_item_to_app_input(item)
@@ -327,10 +337,10 @@ def _update_queue_after_run(job_id: str, success: bool, error: str | None = None
     processed = processed_apps.load_processed(processed_path)
 
     if success:
-        oq.update_status(queue, item.get("queue_id", ""), "produced")
+        oq.update_status(queue, item.get("queue_id", ""), "produced", job_id=job_id)
         processed_apps.mark_produced(processed, feature_key, parent_key, job_id)
     else:
-        oq.update_status(queue, item.get("queue_id", ""), "failed", error=error)
+        oq.update_status(queue, item.get("queue_id", ""), "failed", error=error, job_id=job_id)
         processed_apps.mark_failed(processed, feature_key, parent_key, error or "pipeline failed")
 
     oq.save_queue(queue_path, queue)
@@ -352,6 +362,8 @@ def main():
               "real: 手动导入 data/inputs/real [legacy/dev-only，非主流程]"),
     )
     parser.add_argument("--job-id", default=None, help="Pre-assigned job ID (from server)")
+    parser.add_argument("--queue-id", default=None,
+                        help="queue mode 定向消费：只消费该 queue_id 对应的 item（不指定=消费下一个 pending）")
     parser.add_argument("--regions", default="", help="crawl/auto: 地区，逗号分隔，如 CN,US")
     parser.add_argument("--platforms", default="", help="crawl/auto: 平台，逗号分隔")
     parser.add_argument("--limit", type=int, default=None, help="crawl/auto: 每请求条数")
@@ -411,7 +423,7 @@ def main():
     p(f"  输出目录: {output_dir}")
 
     try:
-        qa = _run_pipeline_steps(mode, job_id, output_dir)
+        qa = _run_pipeline_steps(mode, job_id, output_dir, queue_id=args.queue_id)
         finalize_pipeline_report(total_passed=bool(qa.get("passed")))
         if mode == "queue":
             _update_queue_after_run(job_id, success=bool(qa.get("passed")))
@@ -444,13 +456,13 @@ def main():
         sys.exit(1)
 
 
-def _run_pipeline_steps(mode: str, job_id: str, output_dir: Path) -> dict:
+def _run_pipeline_steps(mode: str, job_id: str, output_dir: Path, queue_id: str | None = None) -> dict:
     """Execute all pipeline steps. Returns the QA report. Raises on any failure."""
     # === Step 1: Market Input ===
     t0 = time.time()
     step_header(1, "读取市场数据", "MarketInput")
     step_start("market_input", "读取市场数据", "MarketInput")
-    apps = load_market_input(mode=mode)
+    apps = load_market_input(mode=mode, queue_id=queue_id)
     p(f"  已加载 {len(apps)} 个候选应用")
     for a in apps:
         p(f"    • {a['name_cn']} ({a['name']}) - {a['downloads']:,} 下载")

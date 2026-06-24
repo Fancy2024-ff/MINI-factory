@@ -256,7 +256,134 @@ function growthFields(bp: Blueprint): Partial<GeneratedResult> {
   }
 }
 
+// API 失败降级时，把传播闭环（含 growthLoop 对象 + 扁平字段）整体降级为 fallback_preview，
+// 杜绝「flat capabilityMode=fallback_preview 但 growthLoop.capability_mode=real、
+// exportSupported=true」这类事实源口径冲突（P0-2 finding #2）。
+// 降级后是一张本地预览、没有真实高清图：导出/下载一律不支持，去水印仅针对当前本地预览。
+function downgradeGrowthLoopForFallback(bp: Blueprint, reason: string): Partial<GeneratedResult> {
+  const src = bp.growth_loop || FALLBACK_BLUEPRINT.growth_loop!
+  const note = `真实生成暂时不可用，当前为本地预览（${reason}）。导出/下载不可用，去水印仅针对当前本地预览。`
+  const downgraded: GrowthLoop = {
+    ...src,
+    capability_mode: 'fallback_preview',
+    capability_note: note,
+    // 本地预览无真实文件可导出/下载，如实降为 false。
+    download_supported: false,
+    export_supported: false,
+    export_label: '导出入口已预留',
+    // 去水印仅针对当前本地预览，文案说明清楚，不承诺真实高清去水印。
+    remove_watermark_condition: src.remove_watermark_supported
+      ? '分享解锁去水印（仅针对当前本地预览）'
+      : src.remove_watermark_condition,
+  }
+  return {
+    growthLoop: downgraded,
+    hasShareCta: downgraded.has_share_cta,
+    shareCtaLabel: downgraded.share_cta_label,
+    hasUnlock: downgraded.has_unlock,
+    unlockType: downgraded.unlock_type,
+    hasWatermark: downgraded.has_watermark,
+    watermarkLabel: downgraded.watermark_label,
+    removeWatermarkSupported: downgraded.remove_watermark_supported,
+    removeWatermarkCondition: downgraded.remove_watermark_condition,
+    brandExposure: downgraded.brand_exposure,
+    brandLabel: downgraded.brand_label,
+    downloadSupported: downgraded.download_supported,
+    exportSupported: downgraded.export_supported,
+    exportLabel: downgraded.export_label,
+    capabilityMode: downgraded.capability_mode,
+    capabilityNote: downgraded.capability_note,
+  }
+}
+
 // PLACEHOLDER_GENERATION_BODY
+
+// --- 导出能力判定（纯函数，供 result.vue 行为复用 + 单测，finding #1/#3）---
+// 把「这个结果到底能怎么导出」从 UI 抽出成可测纯函数：
+//   remote_image  -> 有 http(s) 图片 URL，可 downloadFile + saveImageToPhotosAlbum；
+//   text          -> 脚本/祝福卡/通用文本，可 setClipboardData 复制；
+//   none          -> 仅 base64 无 URL / 无可导出内容，无真实导出路径。
+// 关键约束：exportSupported=true 的结果必须 classifyExportTarget !== 'none'，
+// 否则就是假承诺（base64-only 假导出正是栽在这里）。
+export type ExportKind = 'remote_image' | 'text' | 'none'
+
+export function buildExportText(result: Partial<GeneratedResult>): string {
+  const pd: any = (result && result.previewData) || {}
+  // 搞笑脚本分镜
+  if (result.previewType === 'funnyStoryboard' && Array.isArray(pd.shots)) {
+    const head = pd.topic ? `主题：${pd.topic}\n` : ''
+    return head + pd.shots.map((s: any) => `${s.t} ${s.desc}`).join('\n')
+  }
+  // 祝福卡
+  if (result.previewType === 'blessingCard') {
+    return [pd.to ? `致 ${pd.to}` : '', pd.festival || '', pd.message || '']
+      .filter(Boolean)
+      .join('\n')
+  }
+  // 通用文本
+  if (typeof pd.text === 'string' && pd.text) return pd.text
+  // 兜底：标题 + 分享文案
+  return [result.title, result.shareCopy].filter(Boolean).join('\n')
+}
+
+export function classifyExportTarget(
+  result: Partial<GeneratedResult>,
+): { kind: ExportKind; image?: string; text?: string } {
+  const pd: any = (result && result.previewData) || {}
+  // 1. 远程图片 URL：可真实保存相册。
+  if (typeof pd.image === 'string' && /^https?:\/\//.test(pd.image)) {
+    return { kind: 'remote_image', image: pd.image }
+  }
+  // 2. 文本型结果：可复制。base64-only（无 URL）不算可导出图片，落到文本/none。
+  const text = buildExportText(result)
+  if (text) return { kind: 'text', text }
+  return { kind: 'none' }
+}
+
+// base64-only（真实生成成功但只有 base64、无可保存 URL）：图片可渲染、realGeneration 保持 true，
+// 但没有稳定文件可存相册，导出能力如实降级（finding #1，方案 B）。同步 growthLoop 对象 + 扁平字段，
+// 避免「flat exportSupported=false 但 growthLoop.export_supported=true」的口径冲突。
+function downgradeExportForBase64Only(bp: Blueprint): Partial<GeneratedResult> {
+  const src = bp.growth_loop || FALLBACK_BLUEPRINT.growth_loop!
+  const label = '图片 URL 缺失，暂不可导出'
+  const downgraded: GrowthLoop = {
+    ...src,
+    download_supported: false,
+    export_supported: false,
+    export_label: label,
+  }
+  return {
+    growthLoop: downgraded,
+    downloadSupported: false,
+    exportSupported: false,
+    exportLabel: label,
+  }
+}
+
+// 当前构建未配置真实 API（GENERATION_MODE!=='api'），核心模板走本地 mock 时的本地预览态。
+// 模板事实源支持真实生成（real_generation=true），但「本次运行结果」并非真实生成：
+// 必须整体降级为 fallback_preview / local preview，导出/下载不可用，不显示 real（finding #2）。
+function buildLocalPreviewFallback(bp: Blueprint, input: GenerateInput): GeneratedResult {
+  const base = buildFromBlueprint(bp, input)
+  const reason = '当前构建未配置真实生成 API，展示本地预览'
+  base.previewData = {
+    ...(base.previewData || {}),
+    local_preview: true,
+    mock_preview: true,
+    fallback_note: reason,
+  }
+  return {
+    id: genId(),
+    createdAt: Date.now(),
+    ...base,
+    // 「事实源支持真实生成」≠「本次运行是真实生成」：本地 mock 必须如实标 fallback_preview。
+    realGeneration: false,
+    fallbackMode: true,
+    // 传播闭环整体降级（含 growthLoop 对象 + 扁平 capability/export 字段），口径一致。
+    ...downgradeGrowthLoopForFallback(bp, reason),
+    qaHint: 'local preview (no real API configured)',
+  }
+}
 
 // 由 blueprint 的 mock_example + 用户输入合成一个 GeneratedResult（不含 id/createdAt）。
 function buildFromBlueprint(
@@ -298,7 +425,8 @@ function buildFromBlueprint(
     shareTitle: (gl && gl.share_title) || shareTitle,
     shareCopy: (gl && gl.share_copy) || shareCopy,
     unlockHint: (gl && gl.unlock_hint) || unlockHint,
-    watermarkEnabled: true,
+    // 水印初始态来自事实源 has_watermark，而非硬编码 true（finding #6）。
+    watermarkEnabled: gl ? gl.has_watermark !== false : true,
     // 模板能力真实状态：从 blueprint 透传，前端据此展示真实/预览，不靠猜。
     templateStatus: bp.template_status,
     generationBackend: bp.generation_backend,
@@ -355,30 +483,59 @@ async function callRealApi(bp: Blueprint, input: GenerateInput): Promise<Generat
   // 体积可控时保留，避免 setStorageSync 超限导致结果丢失。
   const imageUrl = r.image_url || ''
   let imageBase64 = ''
+  // 仅返回 base64 且超限：本地无法保存/渲染。绝不静默丢图还标 realGeneration=true，
+  // 否则结果页是空白却显示"真实生成"。这种情况显式降级为 apiFailed/fallbackMode。
+  const onlyLargeBase64 =
+    !imageUrl &&
+    !!r.image_base64 &&
+    r.image_base64.length > MAX_BASE64_LEN
+  if (onlyLargeBase64) {
+    return buildApiFailedFallback(
+      bp,
+      input,
+      '真实生成成功但图片体积过大，无法本地保存/渲染（仅返回超大 base64、无图片 URL）',
+    )
+  }
   if (!imageUrl && r.image_base64 && r.image_base64.length <= MAX_BASE64_LEN) {
     imageBase64 = r.image_base64
   }
   // 真实结果以后端 preview_type 为准（image / avatar / stickerPack / petVideo）。
   const previewType = (resp.preview_type || r.preview_type || bp.preview_type) as PreviewType
   const gl = bp.growth_loop
+  // base64-only（有可渲染 base64 但无可保存 URL）：图能显示、realGeneration 仍为 true，
+  // 但没有稳定文件可存相册，导出能力如实降级（finding #1，方案 B），不留假承诺。
+  const isBase64Only = !imageUrl && !!imageBase64
+  // 以 mock_example 的 preview_data 为题材身份底座（avatar 的 note/styles、sticker 的
+  // theme/stickers/count、petVideo 的 line/duration），再叠加真实图片字段，
+  // 让题材分支的可读字段 + 真实生成图同时可见，而不是丢掉题材身份只剩一张图。
+  const identityData = { ...(example.preview_data || {}) }
+  const promptText = r.prompt || prompt
+  if (promptText) {
+    if ('note' in identityData) identityData.note = `风格关键词：${promptText}`
+    else if ('theme' in identityData) identityData.theme = promptText
+    else if ('line' in identityData) identityData.line = promptText
+  }
+  const previewData = {
+    ...identityData,
+    image: imageUrl,
+    image_base64: imageBase64,
+    prompt: promptText,
+    caption: r.caption || '',
+    // pet-talk 等视频预留：后端 video_supported=false 时如实标注
+    videoSupported: resp.video_supported !== false ? undefined : false,
+  }
   return {
     id: genId(),
     createdAt: Date.now(),
     template: tpl,
     title: r.title || example.title,
     previewType,
-    previewData: {
-      image: imageUrl,
-      image_base64: imageBase64,
-      prompt: r.prompt || prompt,
-      caption: r.caption || '',
-      // pet-talk 等视频预留：后端 video_supported=false 时如实标注
-      videoSupported: resp.video_supported !== false ? undefined : false,
-    },
+    previewData,
     shareTitle: (gl && gl.share_title) || example.share_title || bp.share_hooks[0] || '看看我生成的结果',
     shareCopy: (gl && gl.share_copy) || example.share_copy || bp.share_hooks[1] || bp.share_hooks[0] || '',
     unlockHint: (gl && gl.unlock_hint) || example.unlock_hint || bp.unlock_hooks[0] || '分享解锁高清无水印结果',
-    watermarkEnabled: true,
+    // 水印初始态来自事实源 has_watermark（finding #6）。
+    watermarkEnabled: gl ? gl.has_watermark !== false : true,
     // 核心模板真实链路成功：如实标记 real_generation / template_api。
     templateStatus: bp.template_status || 'core_runnable',
     generationBackend: bp.generation_backend || 'template_api',
@@ -387,6 +544,8 @@ async function callRealApi(bp: Blueprint, input: GenerateInput): Promise<Generat
     boundaryNote: bp.boundary_note,
     // 结构化传播闭环字段（P0-2）：真实链路成功时 capability_mode 仍取自事实源（核心模板为 real）。
     ...growthFields(bp),
+    // base64-only：图可渲染但无稳定文件可存相册，导出/下载如实降级（finding #1）。
+    ...(isBase64Only ? downgradeExportForBase64Only(bp) : {}),
     inputSummary: prompt,
     sourceBlueprint: tpl,
     nextActionHint: (gl && gl.unlock_hint) || bp.unlock_hooks[0] || '分享解锁更多',
@@ -410,11 +569,11 @@ function buildApiFailedFallback(
     id: genId(),
     createdAt: Date.now(),
     ...base,
-    // 真实链路失败：不冒充真实生成成功。capabilityMode 如实降为 fallback_preview。
+    // 真实链路失败：不冒充真实生成成功。capability 口径整体降级（含 growthLoop 对象 +
+    // 扁平 capabilityMode/exportSupported/downloadSupported），杜绝口径冲突（finding #2）。
+    ...downgradeGrowthLoopForFallback(bp, reason),
     realGeneration: false,
     fallbackMode: true,
-    capabilityMode: 'fallback_preview',
-    capabilityNote: '真实生成暂时不可用，已临时回退本地预览（apiFailed）。',
     apiFailed: true,
     fallbackReason: reason,
     qaHint: '真实生成失败，当前展示为本地预览（apiFailed）',
@@ -493,6 +652,15 @@ export async function mockGenerate(input: GenerateInput): Promise<GeneratedResul
 
   // 本地 mock：模拟一点生成耗时
   await new Promise((r) => setTimeout(r, 600))
+
+  // 核心模板（事实源 real_generation=true）但当前构建未配置真实 API：本次结果并非真实生成，
+  // 必须降级为本地预览态，不得显示 real / 高清导出（finding #2）。
+  if (API_TEMPLATES.indexOf(bp.template_id) !== -1 && bp.real_generation === true) {
+    const local = buildLocalPreviewFallback(bp, input)
+    saveResult(local)
+    return local
+  }
+
   return generateFromBlueprint(bp, input)
 }
 

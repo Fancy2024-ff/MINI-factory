@@ -1,6 +1,8 @@
 <!--
   pet-talk-viral 模板 · index 首页（覆盖 base）。
-  题材身份：宠物说话视频。强调"上传宠物照 → 生成说话视频 → 朋友圈分享"。
+  题材身份：宠物说话预览。口径：当前按台词生成"会说话的宠物"预览/封面/海报，
+  照片仅占位、不参与生成（template.json pet_photo.drives_generation=false），
+  动态视频/配音为后续能力边界——文案不得宣称"生成视频/高清视频/完整视频"。
   token 契约与 base 一致。
 -->
 <template>
@@ -8,14 +10,14 @@
     <view class="hero">
       <text class="title">__APP_NAME__</text>
       <text class="subtitle">__APP_SUBTITLE__</text>
-      <text class="badge">宠物说话 · 视频生成</text>
+      <text class="badge">宠物说话 · 预览生成</text>
     </view>
     <view class="pet-stage">
-      <view class="pet-frame"><text class="pet-ph">🐶 视频预览</text></view>
+      <view class="pet-frame"><text class="pet-ph">🐶 宠物说话预览</text></view>
     </view>
     <view class="actions">
-      <button class="btn-primary" @click="goToForm">上传宠物照片</button>
-      <button class="btn-share" @click="shareVideo">生成视频分享朋友圈</button>
+      <button class="btn-primary" @click="goToForm">输入台词，生成预览</button>
+      <button class="btn-share" @click="sharePreview">分享预览到朋友圈</button>
     </view>
     <view class="features">
       <view class="feature-item" v-for="(f, i) in features" :key="i">
@@ -31,8 +33,8 @@ const features = __APP_FEATURES_JSON__
 function goToForm() {
   uni.navigateTo({ url: '/pages/form/form' })
 }
-function shareVideo() {
-  uni.showToast({ title: '视频生成后可分享到朋友圈', icon: 'none' })
+function sharePreview() {
+  uni.showToast({ title: '宠物说话预览生成后可分享到朋友圈', icon: 'none' })
 }
 </script>
 

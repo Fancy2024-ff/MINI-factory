@@ -41,6 +41,63 @@ def test_pipeline_start_requires_api_key(server_client):
     assert res.status_code == 401
 
 
+def test_pipeline_start_defaults_async_enqueue(server_client, auth_headers):
+    """/api/pipeline/start 默认 async：入队 task，返回 task_id/job_id，不直接同步执行。"""
+    client, api = server_client
+    res = client.post("/api/pipeline/start", headers=auth_headers, json={"mode": "queue"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["accepted"] is True
+    assert body["execution_mode"] == "async"
+    assert body["kind"] == "pipeline.run"
+    assert body["status"] == "pending"
+    assert body["task_id"] and body["job_id"]
+    # 没有起同步子进程
+    assert api.pipeline_process is None
+    # task 真的进了 task_store
+    task = api._task_store().get_task(body["task_id"])
+    assert task is not None and task["status"] == "pending"
+    assert task["payload"]["mode"] == "queue"
+
+
+def test_pipeline_start_crawl_maps_to_crawl_kind(server_client, auth_headers):
+    """mode=crawl 入队为 opportunity.crawl 任务。"""
+    client, api = server_client
+    res = client.post("/api/pipeline/start", headers=auth_headers,
+                      json={"mode": "crawl", "regions": "US", "platforms": "app_store"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["kind"] == "opportunity.crawl"
+    task = api._task_store().get_task(body["task_id"])
+    assert task["payload"]["regions"] == "US"
+
+
+def test_pipeline_start_sync_compat(server_client, auth_headers, monkeypatch):
+    """execution_mode=sync 走旧子进程模型（兼容/调试，非主路径）。"""
+    client, api = server_client
+
+    class _FakeProc:
+        def poll(self):
+            return None
+        returncode = 0
+
+    monkeypatch.setattr(api.subprocess, "Popen", lambda *a, **k: _FakeProc())
+
+    async def _noop(job_id):
+        return None
+    monkeypatch.setattr(api, "_stream_pipeline_output", _noop)
+
+    res = client.post("/api/pipeline/start", headers=auth_headers,
+                      json={"mode": "queue", "execution_mode": "sync"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["execution_mode"] == "sync"
+    assert body["job_id"]
+    # 同步模型下没有入队 task
+    assert api._task_store().task_summary()["total"] == 0
+    api.pipeline_process = None  # 清理
+
+
 def test_pipeline_stop_requires_api_key(server_client):
     client, _ = server_client
     res = client.post("/api/pipeline/stop")

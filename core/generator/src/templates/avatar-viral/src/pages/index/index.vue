@@ -1,6 +1,8 @@
 <!--
   avatar-viral 模板 · index 首页（覆盖 base）。
-  题材身份：AI 头像生成。强调"生成 → 结果展示 → 分享解锁"。
+  题材身份：AI 头像生成。强调"输入风格 → 生成 → 结果展示 → 分享解锁"。
+  口径：当前按风格描述生成头像，照片仅占位、不参与生成（与 template.json
+  input_fields.photo.drives_generation=false 一致），文案不得宣称上传照片驱动生成。
   token 契约与 base 一致：__APP_NAME__ / __APP_SUBTITLE__ / __APP_FEATURES_JSON__。
 -->
 <template>
@@ -14,7 +16,7 @@
       <view class="avatar-frame"><text class="avatar-ph">头像预览</text></view>
     </view>
     <view class="actions">
-      <button class="btn-primary" @click="goToForm">上传照片，生成头像</button>
+      <button class="btn-primary" @click="goToForm">输入风格，生成头像</button>
       <button class="btn-share" @click="shareUnlock">分享解锁高清头像</button>
     </view>
     <view class="features">

@@ -3,7 +3,7 @@
   "name_cn": "宠物说话",
   "name_en": "Pet Talk",
   "category": "viral",
-  "description": "上传宠物照片，配一句台词，生成会说话的宠物预览（封面/海报），分享朋友圈解锁高清。",
+  "description": "配一句台词，生成会说话的宠物预览（封面/海报），分享朋友圈解锁高清。",
   "preview_type": "petVideo",
   "template_status": "core_runnable",
   "status_label": "核心可跑通",
@@ -18,7 +18,7 @@
     "has_share_cta": true,
     "share_cta_label": "分享宠物预览",
     "share_title": "我家宠物开口说话了",
-    "share_copy": "上传宠物照和台词生成宠物说话预览，分享后解锁高清封面/导出",
+    "share_copy": "一句台词生成宠物说话预览，分享后解锁高清封面/导出",
     "has_unlock": true,
     "unlock_type": "timeline_share_unlock",
     "unlock_hint": "分享后解锁高清宠物说话预览和去水印导出",
@@ -38,10 +38,11 @@
   "input_fields": [
     {
       "id": "pet_photo",
-      "label": "上传宠物照片",
+      "label": "宠物照片（占位，暂不参与生成）",
       "type": "image",
       "required": false,
-      "placeholder": "点击上传宠物照片（占位，可选）"
+      "placeholder": "可上传占位，当前生成以下方台词为准",
+      "drives_generation": false
     },
     {
       "id": "line",
@@ -59,10 +60,10 @@
   "pages": ["index", "form", "result", "upload", "profile"],
   "share_hooks": [
     "我家宠物开口说话了！",
-    "上传宠物照 + 一句台词，生成会说话的宠物视频"
+    "一句台词生成会说话的宠物预览"
   ],
   "unlock_hooks": [
-    "分享到朋友圈解锁高清视频",
+    "分享到朋友圈解锁高清封面",
     "分享解锁去水印导出"
   ],
   "growth_angles": [
@@ -84,7 +85,7 @@
         "poster": "pet-video-poster-placeholder"
       },
       "share_title": "我家宠物开口说话了！",
-      "share_copy": "上传宠物照 + 一句台词，生成会说话的宠物预览",
+      "share_copy": "一句台词生成会说话的宠物预览",
       "unlock_hint": "分享到朋友圈解锁高清 + 去水印"
     }
   ]

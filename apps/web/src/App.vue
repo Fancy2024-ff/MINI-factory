@@ -8,6 +8,8 @@ import type {
   PipelineLaunchOptions,
   PipelineMode,
   PipelineStep,
+  TaskItem,
+  TaskSummary,
 } from './types/job'
 import { api, connectPipelineWS, type WSHandle } from './services/api'
 import AppleTopNav from './components/AppleTopNav.vue'
@@ -20,6 +22,7 @@ import SubmitCenterPanel from './components/SubmitCenterPanel.vue'
 import PlatformsPanel from './components/PlatformsPanel.vue'
 import OpportunityBoard from './components/OpportunityBoard.vue'
 import OpportunityExplorer from './components/OpportunityExplorer.vue'
+import TaskQueuePanel from './components/TaskQueuePanel.vue'
 
 const jobs = ref<JobSummary[]>([])
 const currentJob = ref<JobDetail | null>(null)
@@ -33,10 +36,15 @@ const running = ref(false)
 const logs = ref<string[]>([])
 const activeTab = ref('overview')
 const error = ref('')
+const notice = ref('')
 const wsStatus = ref('')
 const mode = ref<PipelineMode>('auto')
 const runtimePipelineSteps = ref<PipelineStep[]>([])
 const selectedStepId = ref('')
+// 生产任务系统视图状态（只读 + cancel/retry；底层逻辑在后端，不在前端）。
+const tasks = ref<TaskItem[]>([])
+const taskSummary = ref<TaskSummary | null>(null)
+const busyTaskId = ref('')
 const launchOptions = ref<PipelineLaunchOptions>({
   regions: 'CN,US',
   platforms: 'app_store',
@@ -59,10 +67,38 @@ function updateLaunchOptions(next: PipelineLaunchOptions) {
 
 let wsHandle: WSHandle | null = null
 let statusTimer: ReturnType<typeof setInterval> | null = null
+let tasksTimer: ReturnType<typeof setInterval> | null = null
+
+// 任务有「进行中/等待中」时持续轮询，让队列状态在演示时自动推进。
+function hasActiveTasks() {
+  const s = taskSummary.value?.by_status
+  if (!s) return false
+  return (s.pending || 0) > 0 || (s.running || 0) > 0
+}
+
+function startTaskPolling() {
+  if (tasksTimer) return
+  tasksTimer = setInterval(async () => {
+    // 仅在任务页可见或仍有活跃任务时刷新，避免无意义轮询。
+    if (activeTab.value === 'tasks' || hasActiveTasks()) {
+      await loadTasks()
+    } else {
+      stopTaskPolling()
+    }
+  }, 4000)
+}
+
+function stopTaskPolling() {
+  if (tasksTimer) {
+    clearInterval(tasksTimer)
+    tasksTimer = null
+  }
+}
 
 const tabs = [
   { id: 'overview', label: '机会工厂' },
   { id: 'opportunities', label: '机会数据' },
+  { id: 'tasks', label: '任务队列' },
   { id: 'console', label: '生产日志' },
   { id: 'decision', label: '决策总览' },
   { id: 'deliverables', label: '交付物' },
@@ -117,12 +153,62 @@ async function refreshOpportunityData() {
   await loadOpportunityDetails()
 }
 
+async function loadTasks() {
+  try {
+    const [list, summary] = await Promise.all([
+      api.getTasks({ limit: 50 }),
+      api.getTaskSummary(),
+    ])
+    tasks.value = list.tasks || []
+    taskSummary.value = summary
+  } catch (e: any) {
+    // 任务库为空或后端未起也不该污染主错误条，仅在确无其它数据时提示。
+    if (!opportunitySummary.value && !currentJob.value) {
+      error.value = '任务数据读取失败: ' + e.message
+    }
+  }
+}
+
+async function cancelTask(taskId: string) {
+  busyTaskId.value = taskId
+  try {
+    await api.cancelTask(taskId)
+    await loadTasks()
+  } catch (e: any) {
+    error.value = e.message
+  } finally {
+    busyTaskId.value = ''
+  }
+}
+
+async function retryTask(taskId: string) {
+  busyTaskId.value = taskId
+  try {
+    await api.retryTask(taskId)
+    await loadTasks()
+  } catch (e: any) {
+    error.value = e.message
+  } finally {
+    busyTaskId.value = ''
+  }
+}
+
+// generate_now 现在创建一个持久化任务（pipeline.run，定向消费该 queue item），不再
+// 同步直跑。已有 active task 时后端返回 reused=true，前端提示「复用现有任务」。
 async function handleQueueAction(p: { action: 'prioritize' | 'skip' | 'retry' | 'generate_now'; queueId: string }) {
+  error.value = ''
+  notice.value = ''
   try {
     const res = await api.queueAction(p.action, p.queueId)
-    // generate_now 会启动 queue 生成，跟进状态轮询
-    if (p.action === 'generate_now' && res.job_id) {
-      startStatusPolling(res.job_id)
+    if (p.action === 'generate_now') {
+      if (res.reused) {
+        notice.value = `该机会已有进行中的任务（${(res.task_id || '').slice(0, 8)}），已复用，不重复创建。`
+      } else {
+        notice.value = `已创建生成任务 ${(res.task_id || '').slice(0, 8)}，可在「任务队列」查看进度。`
+      }
+      activeTab.value = 'tasks'
+      await loadTasks()
+      startTaskPolling()
     }
     await refreshOpportunityData()
   } catch (e: any) {
@@ -159,6 +245,7 @@ function finishRun(jobId?: string) {
   }
   loadJobs()
   refreshOpportunityData()
+  loadTasks()
 }
 
 function startStatusPolling(jobId: string) {
@@ -279,10 +366,13 @@ onMounted(async () => {
   await loadJobs()
   await loadLatest()
   await refreshOpportunityData()
+  await loadTasks()
+  if (hasActiveTasks()) startTaskPolling()
 })
 
 onBeforeUnmount(() => {
   teardownWatchers()
+  stopTaskPolling()
 })
 </script>
 
@@ -308,7 +398,12 @@ onBeforeUnmount(() => {
     <main class="main" @click="menuOpen = false">
       <div v-if="error" class="error-banner">
         {{ error }}
-        <button class="retry-btn" @click="error = ''; loadJobs(); loadLatest(); refreshOpportunityData()">重试</button>
+        <button class="retry-btn" @click="error = ''; loadJobs(); loadLatest(); refreshOpportunityData(); loadTasks()">重试</button>
+      </div>
+
+      <div v-if="notice" class="notice-banner">
+        {{ notice }}
+        <button class="retry-btn" @click="notice = ''">知道了</button>
       </div>
 
       <div v-if="wsStatus && running" class="ws-banner">{{ wsStatus }}</div>
@@ -336,6 +431,16 @@ onBeforeUnmount(() => {
           :features="opportunityFeatures"
           :selected-view="opportunityView"
           @update:selected-view="setOpportunityView"
+        />
+        <TaskQueuePanel
+          v-if="activeTab === 'tasks'"
+          :summary="taskSummary"
+          :tasks="tasks"
+          :busy-task-id="busyTaskId"
+          @refresh="loadTasks"
+          @cancel="cancelTask"
+          @retry="retryTask"
+          @select-job="selectJob"
         />
         <FactoryConsole
           v-if="activeTab === 'console'"
@@ -408,6 +513,18 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-sm);
   font-size: 12px;
   margin-bottom: 12px;
+}
+
+.notice-banner {
+  background: rgba(0, 113, 227, 0.08);
+  color: #0060c0;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .panel-area {

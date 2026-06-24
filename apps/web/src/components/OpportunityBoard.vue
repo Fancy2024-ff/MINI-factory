@@ -332,7 +332,11 @@ function openView(view: OpportunityView) {
             <em>{{ pct(item.final_score) }}</em>
           </button>
           <div class="queue-item-actions">
-            <button class="qa-btn" :disabled="running" @click.stop="runQueueAction('generate_now', item)">立即生成</button>
+            <button
+              class="qa-btn"
+              :disabled="running || item.status === 'queued'"
+              @click.stop="runQueueAction('generate_now', item)"
+            >{{ item.status === 'queued' ? '任务进行中' : '创建生成任务' }}</button>
             <button class="qa-btn ghost" @click.stop="runQueueAction('prioritize', item)">提权</button>
             <button class="qa-btn ghost" @click.stop="runQueueAction('retry', item)">重试</button>
             <button class="qa-btn ghost" @click.stop="runQueueAction('skip', item)">跳过</button>

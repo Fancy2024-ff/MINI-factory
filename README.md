@@ -85,6 +85,27 @@ python apps/api/main.py
 
 后端运行在 http://localhost:8000
 
+### 启动任务 worker（正式执行框架）
+
+正式执行模型 = **task queue + worker**。API 默认只“创建任务 + 返回 task_id/job_id”，
+真正执行由 worker 负责（`pipeline.run` / `opportunity.crawl` / `pipeline.auto`）。
+
+```bash
+# 启动一个常驻 worker 消费任务（Ctrl-C 优雅停止）
+python -m core.pipeline.task_worker --worker-id worker-local
+
+# 入队（默认 async）：
+#   POST /api/pipeline/start   { "mode": "queue" }            -> {task_id, job_id, ...}
+#   POST /api/pipeline/enqueue { "kind": "pipeline.run", "payload": {"mode": "queue"} }
+#   POST /api/opportunities/queue/action { "action": "generate_now", "queue_id": "..." }
+```
+
+- 任务库（SQLite）：`data/runtime/tasks.sqlite3`（已 gitignore）。
+- `/api/pipeline/start` 默认 `execution_mode=async`；`sync` 仅兼容/调试，非主路径。
+- `generate_now` 正式走 task queue（定向消费指定 `queue_id`，已有活跃任务则复用）。
+- 当前是单机 SQLite 队列，非分布式；不包含微信上架闭环。
+- 详见 `docs/operation/RUNBOOK.md` 的「任务系统（正式执行框架）」。
+
 ### 启动前端 Dashboard
 
 ```bash
@@ -193,8 +214,9 @@ npm test -- --run
 
 ## 已知限制（设计取舍，非 Bug）
 
-- **单 worker + 全局状态** — 同时只能运行一个 Pipeline，不支持水平扩展
-- **JSON 文件数据库** — MVP 级别，并发写受 filelock 约束
+- **任务执行 = 单机 SQLite 队列** — 正式执行走 task queue + worker（`data/runtime/tasks.sqlite3`），
+  非多机分布式（无中心 broker / 跨机协调）；旧的请求线程内同步执行仅作 `execution_mode=sync` 兼容
+- **业务状态用 JSON 文件** — opportunity-queue 等仍为 JSON（filelock 约束并发写）；任务状态已迁 SQLite
 - **核心链路为规则版 v1** — opportunity/viral/growth 评分与策略为可解释规则，LLM 增强走 `core/integrations`，属下一阶段
 - **Vue 组件零 render 测试** — 组件无 render/interaction test（数据层有测试）
 - **WebSocket token 在 query string** — 浏览器 WS API 限制，已文档化
@@ -217,7 +239,7 @@ npm test -- --run
 - [ ] LLM 驱动的代码增强（更智能的页面逻辑）
 - [ ] 审核结果回填 + 自动复盘迭代
 - [ ] miniprogram-ci 自动上传（替代手动上架）
-- [ ] 任务队列替换子进程模型（支持并发 Pipeline）
-- [ ] SQLite/PostgreSQL 替换 JSON 文件数据库
+- [x] 任务队列替换子进程模型（task queue + worker 为正式执行框架；详见 RUNBOOK）
+- [ ] 分布式 worker（当前单机 SQLite 队列；PostgreSQL / 跨机协调待做）
 - [ ] Rate limiting
 - [ ] Vue 组件测试 + E2E 测试

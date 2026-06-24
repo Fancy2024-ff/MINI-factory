@@ -17,12 +17,26 @@ from core.qa.generator_qa import run_generator_qa
 
 
 def test_full_config_passes():
-    """仓库内 5 个 viral 模板配置应通过配置级检查。"""
+    """仓库内 5 套 viral + ai-image 配置应通过配置级 + overlay 文案级检查。"""
     result = run_generator_qa()
     assert result["passed"], result["issues"]
     for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
-              "funny-video-viral", "blessing-video-viral"):
+              "funny-video-viral", "blessing-video-viral", "ai-image"):
         assert result["checks"][f"template_config:{t}"] is True
+        assert result["checks"][f"overlay_copy:{t}"] is True
+
+
+def test_ai_image_is_in_qa_scope():
+    """P0-1 收口范围必须含 ai-image：checks 里能看到它的 template_config / overlay_copy。"""
+    from core.qa.generator_qa import CLASSIFIED_TEMPLATES
+    assert "ai-image" in CLASSIFIED_TEMPLATES
+    result = run_generator_qa()
+    assert "template_config:ai-image" in result["checks"]
+    assert "overlay_copy:ai-image" in result["checks"]
+    # 扫描范围 = 5 套 viral + ai-image，共 6 个模板，各有两个 check 维度。
+    scanned = sorted(k.split(":", 1)[1] for k in result["checks"] if k.startswith("template_config:"))
+    assert scanned == sorted(["avatar-viral", "sticker-viral", "pet-talk-viral",
+                              "funny-video-viral", "blessing-video-viral", "ai-image"])
 
 
 def _patch_templates(monkeypatch, tmp_path):
@@ -60,6 +74,30 @@ def _good_cfg(template="avatar-viral"):
         "unlock_hooks": ["a", "b"],
         "mock_examples": [{"title": "t", "preview_type": "avatar", "preview_data": {},
                            "share_title": "s", "share_copy": "c", "unlock_hint": "u"}],
+        # P0-2：viral 模板必须带结构化 growth_loop 事实源。
+        "growth_loop": _good_growth_loop(honest),
+    }
+
+
+def _good_growth_loop(honest: bool) -> dict:
+    return {
+        "has_share_cta": True,
+        "share_cta_label": "分享",
+        "share_title": "s",
+        "share_copy": "c",
+        "has_unlock": True,
+        "unlock_type": "share_to_unlock",
+        "unlock_hint": "u",
+        "has_watermark": True,
+        "watermark_label": "水印",
+        "remove_watermark_supported": True,
+        "brand_exposure": True,
+        "brand_label": "出品",
+        "download_supported": not honest,
+        "export_supported": not honest,
+        "export_label": "导出",
+        "capability_mode": "fallback_preview" if honest else "real",
+        "capability_note": "n",
     }
 
 
@@ -178,6 +216,234 @@ def test_honest_preview_misleading_copy_fails(tmp_path, monkeypatch):
     result = run_generator_qa()
     assert not result["passed"]
     assert any("误导文案" in i for i in result["issues"])
+
+
+def test_upload_claim_without_drive_flag_fails(tmp_path, monkeypatch):
+    """image 输入文案宣称「上传照片」驱动生成，但未标 drives_generation:false 必须失败。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    bad = _good_cfg("avatar-viral")
+    bad["input_fields"] = [
+        {"id": "photo", "label": "上传照片", "type": "image", "required": False,
+         "placeholder": "点击上传一张清晰正脸照"},
+    ]
+    _write_cfg(tmp_path, "avatar-viral", bad)
+    result = run_generator_qa()
+    assert not result["passed"]
+    assert result["checks"]["template_config:avatar-viral"] is False
+    assert any("上传图片驱动生成" in i for i in result["issues"])
+
+
+def test_upload_placeholder_with_drive_flag_passes(tmp_path, monkeypatch):
+    """同样是 image 字段，标了 drives_generation:false（诚实占位）即通过该项检查。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    okcfg = _good_cfg("avatar-viral")
+    okcfg["input_fields"] = [
+        {"id": "photo", "label": "参考照片（占位，暂不参与生成）", "type": "image",
+         "required": False, "placeholder": "可上传占位", "drives_generation": False},
+    ]
+    _write_cfg(tmp_path, "avatar-viral", okcfg)
+    result = run_generator_qa()
+    # avatar-viral 该项不因上传文案失败（其它模板正常）。
+    assert result["checks"]["template_config:avatar-viral"] is True
+    assert not any("上传图片驱动生成" in i for i in result["issues"])
+
+
+def test_repo_templates_have_no_upload_dishonesty():
+    """仓库内真实 5+1 模板：不得存在「宣称上传驱动但未标占位」的 image 字段。"""
+    result = run_generator_qa()
+    assert not any("上传图片驱动生成" in i for i in result["issues"]), result["issues"]
+
+
+# --- overlay Vue 用户可见文案诚实性（P0-1 收口）---
+
+def _write_vue(tmp_path: Path, template: str, page: str, body: str):
+    """在临时模板目录写一个 overlay 页 src/pages/<page>/<page>.vue。"""
+    d = tmp_path / template / "src" / "pages" / page
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{page}.vue").write_text(body, encoding="utf-8")
+
+
+def _pet_talk_cfg_with_placeholder_image():
+    """pet-talk：core_runnable + petVideo + 占位 image 字段（drives_generation false）。"""
+    cfg = _good_cfg("pet-talk-viral")
+    cfg["preview_type"] = "petVideo"
+    cfg["input_fields"] = [
+        {"id": "pet_photo", "label": "宠物照片（占位）", "type": "image", "required": False,
+         "placeholder": "占位，可选", "drives_generation": False},
+        {"id": "line", "label": "台词", "type": "textarea", "required": True, "placeholder": "说点啥"},
+    ]
+    return cfg
+
+
+def test_overlay_vue_video_claim_fails(tmp_path, monkeypatch):
+    """pet-talk（core_runnable 但非动态视频）页面出现「生成视频」文案必须失败。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    _write_cfg(tmp_path, "pet-talk-viral", _pet_talk_cfg_with_placeholder_image())
+    _write_vue(tmp_path, "pet-talk-viral", "index",
+               "<template><view><button>生成视频分享朋友圈</button></view></template>")
+    result = run_generator_qa()
+    assert not result["passed"]
+    assert result["checks"]["template_config:pet-talk-viral"] is False
+    assert any("视频误导文案" in i for i in result["issues"])
+
+
+def test_overlay_vue_upload_cta_fails(tmp_path, monkeypatch):
+    """image 字段仅占位时，页面 CTA「上传照片，生成」必须失败。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    avatar = _good_cfg("avatar-viral")
+    avatar["input_fields"] = [
+        {"id": "photo", "label": "参考照片（占位）", "type": "image", "required": False,
+         "placeholder": "占位", "drives_generation": False},
+    ]
+    _write_cfg(tmp_path, "avatar-viral", avatar)
+    _write_vue(tmp_path, "avatar-viral", "index",
+               "<template><view><button>上传照片，生成头像</button></view></template>")
+    result = run_generator_qa()
+    assert not result["passed"]
+    assert result["checks"]["template_config:avatar-viral"] is False
+    assert any("上传图片驱动生成" in i for i in result["issues"])
+
+
+def test_overlay_vue_bare_upload_without_qualifier_fails(tmp_path, monkeypatch):
+    """非 CTA 文本节点裸「上传照片」且【同段】无占位修饰必须失败。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    avatar = _good_cfg("avatar-viral")
+    avatar["input_fields"] = [
+        {"id": "photo", "label": "参考照片（占位）", "type": "image", "required": False,
+         "placeholder": "占位", "drives_generation": False},
+    ]
+    _write_cfg(tmp_path, "avatar-viral", avatar)
+    _write_vue(tmp_path, "avatar-viral", "index",
+               "<template><view><text>上传照片</text></view></template>")
+    result = run_generator_qa()
+    assert result["checks"]["overlay_copy:avatar-viral"] is False
+    assert any("缺少占位说明" in i for i in result["issues"])
+
+
+def test_overlay_vue_placeholder_attr_misleading_fails(tmp_path, monkeypatch):
+    """placeholder 属性出现「上传图片处理」（上传驱动短语）必须被拦住。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    cfg = _pet_talk_cfg_with_placeholder_image()
+    _write_cfg(tmp_path, "pet-talk-viral", cfg)
+    # 误导文案藏在 placeholder 属性里（旧实现去标签后会丢属性值，漏判）。
+    _write_vue(tmp_path, "pet-talk-viral", "upload",
+               '<template><view><input placeholder="上传图片处理" /></view></template>')
+    result = run_generator_qa()
+    assert result["checks"]["overlay_copy:pet-talk-viral"] is False
+    assert any("上传图片驱动生成" in i for i in result["issues"])
+
+
+def test_overlay_vue_aria_label_video_claim_fails(tmp_path, monkeypatch):
+    """aria-label 属性里的「生成视频」也要被视频误导规则拦住。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    _write_cfg(tmp_path, "pet-talk-viral", _pet_talk_cfg_with_placeholder_image())
+    _write_vue(tmp_path, "pet-talk-viral", "index",
+               '<template><view><button aria-label="生成视频">开始</button></view></template>')
+    result = run_generator_qa()
+    assert result["checks"]["overlay_copy:pet-talk-viral"] is False
+    assert any("视频误导文案" in i for i in result["issues"])
+
+
+def test_overlay_vue_cta_bare_upload_banned_even_with_separate_qualifier(tmp_path, monkeypatch):
+    """规则固定：CTA(button) 里裸「上传照片」一律禁，
+    即便另起一段写了「占位」也不放过（主按钮文案本身在误导）。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    avatar = _good_cfg("avatar-viral")
+    avatar["input_fields"] = [
+        {"id": "photo", "label": "参考照片（占位）", "type": "image", "required": False,
+         "placeholder": "占位", "drives_generation": False},
+    ]
+    _write_cfg(tmp_path, "avatar-viral", avatar)
+    # 按钮裸「上传照片」+ 另一段独立「占位」说明 -> 仍必须失败。
+    _write_vue(tmp_path, "avatar-viral", "index",
+               "<template><view><button>上传照片</button>"
+               "<text>照片仅占位，不参与生成</text></view></template>")
+    result = run_generator_qa()
+    assert result["checks"]["overlay_copy:avatar-viral"] is False
+    assert any("行动按钮(CTA)出现" in i for i in result["issues"])
+
+
+def test_overlay_vue_text_node_inline_qualifier_passes(tmp_path, monkeypatch):
+    """规则固定：非 CTA 文本节点裸「上传照片」+【同段】占位修饰 -> 放过。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    avatar = _good_cfg("avatar-viral")
+    avatar["input_fields"] = [
+        {"id": "photo", "label": "参考照片（占位）", "type": "image", "required": False,
+         "placeholder": "占位", "drives_generation": False},
+    ]
+    _write_cfg(tmp_path, "avatar-viral", avatar)
+    # 同一文本节点内既有"上传照片"又有"占位" -> 通过。
+    _write_vue(tmp_path, "avatar-viral", "index",
+               "<template><view><text>上传照片（占位，可选，不参与生成）</text></view></template>")
+    result = run_generator_qa()
+    assert result["checks"]["overlay_copy:avatar-viral"] is True
+
+
+
+def test_overlay_vue_honest_copy_passes(tmp_path, monkeypatch):
+    """诚实文案（输入台词生成预览 + 占位说明）通过 overlay 扫描。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    _write_cfg(tmp_path, "pet-talk-viral", _pet_talk_cfg_with_placeholder_image())
+    _write_vue(tmp_path, "pet-talk-viral", "index",
+               "<template><view><button>输入台词，生成预览</button>"
+               "<text>上传宠物照片（占位，可选）</text></view></template>")
+    _write_vue(tmp_path, "pet-talk-viral", "upload",
+               "<template><view><button>生成宠物说话预览</button>"
+               "<text>照片仅作占位，不参与生成</text></view></template>")
+    result = run_generator_qa()
+    assert result["checks"]["template_config:pet-talk-viral"] is True
+
+
+def test_overlay_vue_comment_not_flagged(tmp_path, monkeypatch):
+    """口径说明写在 HTML 注释里不应被误判（注释非用户可见文案）。"""
+    _patch_templates(monkeypatch, tmp_path)
+    for t in ("avatar-viral", "sticker-viral", "pet-talk-viral",
+              "funny-video-viral", "blessing-video-viral"):
+        _write_cfg(tmp_path, t, _good_cfg(t))
+    _write_cfg(tmp_path, "pet-talk-viral", _pet_talk_cfg_with_placeholder_image())
+    _write_vue(tmp_path, "pet-talk-viral", "index",
+               "<!-- 文案不得宣称生成视频/高清视频 -->\n"
+               "<template><view><button>输入台词，生成预览</button></view></template>")
+    result = run_generator_qa()
+    assert result["checks"]["template_config:pet-talk-viral"] is True
+
+
+def test_repo_overlay_pages_no_video_or_upload_dishonesty():
+    """仓库内真实 overlay 页：无视频误导 / 无占位图上传驱动 CTA 的不一致。"""
+    result = run_generator_qa()
+    bad = [i for i in result["issues"]
+           if ("视频误导文案" in i) or ("上传图片驱动生成" in i) or ("无占位说明" in i)]
+    assert not bad, bad
 
 
 def _make_generated_project(miniapp_dir: Path, *, with_blueprint=True,

@@ -75,3 +75,62 @@ def test_growth_plan_playbook_via_selected_template_only():
     """theme 缺失但有 selected_template 时，也能命中差异化打法。"""
     md = build_growth_plan(_APP, _VIRAL, {"theme": "", "theme_label": "", "selected_template": "ai-image"})
     assert "前后对比" in md
+
+
+# --- 传播闭环 growth_loop 接入（P0-2）---
+
+
+def _sel(tpl, theme):
+    return {"theme": theme, "theme_label": theme, "selected_template": tpl}
+
+
+def test_share_strategy_has_growth_loop_section():
+    """share-strategy.md 必须含结构化传播闭环口径（分享 CTA / 解锁 / 去水印 / 品牌 / 导出 / 能力）。"""
+    md = build_share_strategy(_APP, _VIRAL, _sel("avatar-viral", "avatar"))
+    assert "传播闭环" in md
+    assert "分享 CTA" in md
+    assert "解锁条件" in md
+    assert "去水印" in md
+    assert "品牌露出" in md
+    assert "下载/导出" in md
+    assert "当前能力" in md
+
+
+def test_share_strategy_core_templates_differentiated():
+    """三个核心模板的分享 CTA 文案必须不同（不是同一套通用壳）。"""
+    avatar = build_share_strategy(_APP, _VIRAL, _sel("avatar-viral", "avatar"))
+    sticker = build_share_strategy(_APP, _VIRAL, _sel("sticker-viral", "sticker"))
+    pet = build_share_strategy(_APP, _VIRAL, _sel("pet-talk-viral", "pet-talk"))
+    assert "分享头像" in avatar
+    assert "分享到群聊" in sticker
+    assert "分享宠物预览" in pet
+    # 三者均标 real，无 fallback 边界声明
+    for md in (avatar, sticker, pet):
+        assert "real / 真实生成" in md
+        assert "边界声明" not in md
+
+
+def test_share_strategy_video_templates_mark_preview_boundary():
+    """funny/blessing 必须明确 preview/fallback 边界，不伪装真实视频。"""
+    for tpl, theme in (("funny-video-viral", "funny-video"), ("blessing-video-viral", "blessing-video")):
+        md = build_share_strategy(_APP, _VIRAL, _sel(tpl, theme))
+        assert "fallback / preview" in md
+        assert "边界声明" in md
+        assert "不是真实视频生成" in md
+
+
+def test_growth_plan_has_growth_loop_summary():
+    """growth-plan.md 含传播闭环摘要，但不做 Viral Score 维度解释（P0-3 边界）。"""
+    md = build_growth_plan(_APP, _VIRAL, _sel("avatar-viral", "avatar"))
+    assert "传播闭环摘要" in md
+    assert "当前能力" in md
+    # 仍保留原有 section
+    for kw in ["增长重心", "渠道", "裂变", "指标"]:
+        assert kw in md
+
+
+def test_growth_plan_video_template_marks_preview():
+    """funny/blessing 增长计划的传播闭环摘要必须标 fallback/preview 边界。"""
+    md = build_growth_plan(_APP, _VIRAL, _sel("funny-video-viral", "funny-video"))
+    assert "fallback / preview" in md
+    assert "不是真实视频生成" in md

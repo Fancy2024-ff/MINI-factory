@@ -20,7 +20,11 @@ def _make_growth_artifacts(output_dir: Path):
 
 
 def _make_miniapp_with_propagation(miniapp_dir: Path):
-    """构造一个含完整交互闭环结构的生成项目（service + config + form + result）。"""
+    """构造一个含完整交互闭环结构的生成项目（service + config + form + result）。
+
+    P0-2 起，「完整接入」必须包含传播闭环 growth_loop 三层：
+    blueprint.json.growth_loop + generation.ts 消费 + result.vue 展示。
+    """
     src = miniapp_dir / "src"
     (src / "services").mkdir(parents=True, exist_ok=True)
     (src / "config").mkdir(parents=True, exist_ok=True)
@@ -30,18 +34,39 @@ def _make_miniapp_with_propagation(miniapp_dir: Path):
     (src / "config" / "template.ts").write_text(
         "export const SELECTED_TEMPLATE = 'avatar-viral'\n", encoding="utf-8"
     )
+    # blueprint.json：含结构化 growth_loop（capability_mode=real）
+    (src / "config" / "blueprint.json").write_text(
+        json.dumps({
+            "template_id": "avatar-viral",
+            "preview_type": "avatar",
+            "growth_loop": {
+                "has_share_cta": True, "share_cta_label": "分享头像",
+                "share_title": "我生成了头像", "share_copy": "分享解锁",
+                "has_unlock": True, "unlock_type": "share_to_unlock", "unlock_hint": "分享解锁去水印",
+                "has_watermark": True, "watermark_label": "MiniForge 水印",
+                "remove_watermark_supported": True, "brand_exposure": True, "brand_label": "MiniForge",
+                "download_supported": True, "export_supported": True, "export_label": "下载高清头像",
+                "capability_mode": "real", "capability_note": "真实生成",
+            },
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
     (src / "services" / "generation.ts").write_text(
         "import { SELECTED_TEMPLATE } from '../config/template'\n"
         "import { GENERATION_MODE, IMAGE_GENERATION_PATH, TEMPLATE_GENERATION_PATH } from '../config/api'\n"
         "export interface GeneratedResult { id: string; template: string; "
-        "shareTitle: string; shareCopy: string; unlockHint: string; watermarkEnabled: boolean }\n"
+        "shareTitle: string; shareCopy: string; unlockHint: string; watermarkEnabled: boolean; "
+        "growthLoop?: any; shareCtaLabel?: string; removeWatermarkSupported?: boolean; "
+        "capabilityMode?: string; exportSupported?: boolean; brandExposure?: boolean }\n"
         "async function callRealApi(): Promise<GeneratedResult | null> {\n"
         "  if (GENERATION_MODE !== 'api') return null\n"
         "  void IMAGE_GENERATION_PATH; void TEMPLATE_GENERATION_PATH; return null\n}\n"
         "export async function mockGenerate(input: any): Promise<GeneratedResult> {\n"
         "  const real = await callRealApi(); if (real) return real\n"
         "  switch (SELECTED_TEMPLATE) { default: return { id: 'x', template: SELECTED_TEMPLATE, "
-        "shareTitle: 's', shareCopy: 'c', unlockHint: 'u', watermarkEnabled: true } }\n}\n",
+        "shareTitle: 's', shareCopy: 'c', unlockHint: 'u', watermarkEnabled: true, "
+        "growthLoop: {}, shareCtaLabel: 'l', removeWatermarkSupported: true, "
+        "capabilityMode: 'real', exportSupported: true, brandExposure: true } }\n}\n",
         encoding="utf-8",
     )
     (src / "pages" / "form" / "form.vue").write_text(
@@ -51,9 +76,13 @@ def _make_miniapp_with_propagation(miniapp_dir: Path):
         encoding="utf-8",
     )
     (src / "pages" / "result" / "result.vue").write_text(
-        "<template><button open-type=\"share\">分享作品</button>"
+        "<template><view>传播闭环 Growth Loop</view>"
+        "<button open-type=\"share\">{{ result.shareCtaLabel }}</button>"
+        "<view>解锁机制 {{ result.unlockHint }}</view>"
         "<button @click=\"u\">分享解锁高清/去水印</button>"
-        "<text>watermark 水印 邀请好友</text></template>"
+        "<text>watermark 水印 邀请好友 品牌露出 导出 当前能力</text>"
+        "<text>{{ result.removeWatermarkSupported }} {{ result.brandExposure }} "
+        "{{ result.exportSupported }} {{ result.capabilityMode }}</text></template>"
         "<script setup lang=\"ts\">function u(){}</script>",
         encoding="utf-8",
     )
@@ -190,3 +219,114 @@ def test_compliance_qa_clean_listing_has_no_warnings(tmp_path):
     result = run_compliance_qa(mini, out)
     assert result["passed"]
     assert result["warnings"] == []
+
+
+# --- 传播闭环产品化分层（P0-2）---
+
+from core.generator.codegen import generate_miniapp
+
+_GL_APP = {
+    "name": "AI Avatar", "name_cn": "AI头像",
+    "description_cn": "测试", "features_cn": ["多风格"],
+}
+_GL_PRD = {"target_platforms": ["wechat"]}
+
+
+def _gen_miniapp(tmp_path, template):
+    gd = tmp_path / ("gen_" + template)
+    gd.mkdir()
+    miniapp_dir, _ = generate_miniapp(_GL_APP, _GL_PRD, gd, template=template)
+    return miniapp_dir
+
+
+def test_growth_qa_growth_loop_fully_wired_passes(tmp_path):
+    """真接入：blueprint + generation.ts + result.vue 三层都消费 growth_loop -> 通过。"""
+    out = tmp_path / "out"
+    out.mkdir()
+    _make_growth_artifacts(out)
+    mini = _gen_miniapp(tmp_path, "avatar-viral")
+
+    result = run_growth_qa(out, miniapp_dir=mini)
+    c = result["checks"]
+    assert c["growth_loop_in_blueprint"] is True
+    assert c["generation_consumes_growth_loop"] is True
+    assert c["result_displays_growth_loop"] is True
+    assert c["result_displays_share_cta"] is True
+    assert c["result_displays_unlock"] is True
+    assert c["result_displays_watermark"] is True
+    assert c["result_displays_remove_watermark"] is True
+    assert c["result_displays_brand"] is True
+    assert c["result_displays_export"] is True
+    assert c["capability_mode_visible"] is True
+    assert c["core_template_not_downgraded"] is True
+    assert result["passed"], result["issues"]
+
+
+def test_growth_qa_doc_only_not_productized(tmp_path):
+    """只有文档：result.vue 不消费 growth_loop、无 blueprint -> 标记未产品化、不通过。"""
+    out = tmp_path / "out"
+    out.mkdir()
+    _make_growth_artifacts(out)
+    # 退化迷你项目：有传播文案但无 growth_loop 结构（旧版「只有文档」形态）
+    mini = tmp_path / "mini"
+    pages = mini / "src" / "pages" / "result"
+    pages.mkdir(parents=True)
+    (pages / "result.vue").write_text(
+        "<template><button open-type=\"share\">分享</button>"
+        "<text>解锁 watermark 水印</text></template>",
+        encoding="utf-8",
+    )
+
+    result = run_growth_qa(out, miniapp_dir=mini)
+    c = result["checks"]
+    assert c["growth_loop_in_blueprint"] is False
+    assert c["result_displays_growth_loop"] is False
+    assert not result["passed"]
+    assert any("未产品化" in i or "传播闭环" in i for i in result["issues"])
+
+
+def test_growth_qa_video_template_must_show_fallback_preview(tmp_path):
+    """funny/blessing：结果页有 fallback/preview 标注 -> 该项通过（不伪装真实视频）。"""
+    out = tmp_path / "out"
+    out.mkdir()
+    _make_growth_artifacts(out)
+    mini = _gen_miniapp(tmp_path, "funny-video-viral")
+
+    result = run_growth_qa(out, miniapp_dir=mini)
+    c = result["checks"]
+    assert c["fallback_preview_visible_for_video_templates"] is True
+    assert c["video_template_not_faked_real"] is True
+
+
+def test_growth_qa_video_template_faked_real_fails(tmp_path):
+    """funny/blessing 的 growth_loop 被标成 real -> 视为伪装真实视频，不通过。"""
+    out = tmp_path / "out"
+    out.mkdir()
+    _make_growth_artifacts(out)
+    mini = _gen_miniapp(tmp_path, "blessing-video-viral")
+    # 篡改 blueprint.json：把 capability_mode 改成 real（伪装真实视频）
+    bp_path = mini / "src" / "config" / "blueprint.json"
+    bp = json.loads(bp_path.read_text(encoding="utf-8"))
+    bp["growth_loop"]["capability_mode"] = "real"
+    bp_path.write_text(json.dumps(bp, ensure_ascii=False), encoding="utf-8")
+
+    result = run_growth_qa(out, miniapp_dir=mini)
+    assert result["checks"]["video_template_not_faked_real"] is False
+    assert not result["passed"]
+    assert any("伪装真实视频" in i for i in result["issues"])
+
+
+def test_growth_qa_core_template_downgraded_fails(tmp_path):
+    """核心模板（avatar）被标成 fallback_preview -> 能力口径错误，不通过。"""
+    out = tmp_path / "out"
+    out.mkdir()
+    _make_growth_artifacts(out)
+    mini = _gen_miniapp(tmp_path, "avatar-viral")
+    bp_path = mini / "src" / "config" / "blueprint.json"
+    bp = json.loads(bp_path.read_text(encoding="utf-8"))
+    bp["growth_loop"]["capability_mode"] = "fallback_preview"
+    bp_path.write_text(json.dumps(bp, ensure_ascii=False), encoding="utf-8")
+
+    result = run_growth_qa(out, miniapp_dir=mini)
+    assert result["checks"]["core_template_not_downgraded"] is False
+    assert not result["passed"]

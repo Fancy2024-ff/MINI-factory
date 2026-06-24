@@ -1,4 +1,5 @@
 ﻿<script setup lang="ts">
+import { computed } from 'vue'
 import type { JobDetail } from '../types/job'
 
 const props = defineProps<{
@@ -78,6 +79,80 @@ function copyArtifact(key: string) {
   const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2)
   navigator.clipboard.writeText(text)
 }
+
+// 传播闭环产品化分层（P0-2）：区分「产品层已接入 / 只有文档 / 缺失」。
+// 数据源：growth-qa-report.json.checks（三层接入检查）+ generator-source.json（事实源摘要）。
+const growthQaChecks = computed<Record<string, any>>(() => {
+  return props.job?.artifacts?.['growth-qa-report.json']?.checks || {}
+})
+const growthLoopSummary = computed<Record<string, any>>(() => {
+  const gs: any = props.job?.artifacts?.['generator-source.json']
+  return gs?.growth_loop_summary || gs?.codegen_report || {}
+})
+
+const propagationStatus = computed(() => {
+  const c = growthQaChecks.value
+  const hasReport = Object.keys(c).length > 0
+  const hasSummary = !!growthLoopSummary.value?.growth_loop_present
+
+  // 完全没有任何传播闭环信号：缺失。
+  if (!hasReport && !hasSummary) {
+    return { level: 'missing', label: '缺失', detail: '未发现传播闭环数据' }
+  }
+
+  // 没有 growth-qa-report：只能凭 generator-source 摘要说「有摘要 / 待 QA 验证」，
+  // 不能直接判定「产品层已接入」（finding #3：行为级接入必须由 QA 校验背书）。
+  if (!hasReport) {
+    return { level: 'partial', label: '仅有摘要 · 待 QA 验证', detail: '有 growth_loop 摘要，待 Growth QA 校验产品层接入' }
+  }
+
+  // ready 必须同时满足三层接入 + 7 项 result_displays_* + 能力可见（finding #3）。
+  const READY_CHECKS = [
+    'growth_loop_in_blueprint',
+    'generation_consumes_growth_loop',
+    'result_displays_growth_loop',
+    'result_displays_share_cta',
+    'result_displays_unlock',
+    'result_displays_watermark',
+    'result_displays_remove_watermark',
+    'result_displays_brand',
+    'result_displays_export',
+    'capability_mode_visible',
+  ]
+  // 视频边界型 / 核心模板的诚实度守护项：存在即必须为 true 才能 ready。
+  const CONDITIONAL_CHECKS = [
+    'fallback_preview_visible_for_video_templates',
+    'video_template_not_faked_real',
+    'core_template_not_downgraded',
+  ]
+
+  const coreReady = READY_CHECKS.every((k) => c[k] === true)
+  const conditionalReady = CONDITIONAL_CHECKS.every((k) => !(k in c) || c[k] === true)
+  const inBlueprint = c.growth_loop_in_blueprint === true
+
+  if (coreReady && conditionalReady) {
+    return { level: 'ready', label: '产品层已接入', detail: 'blueprint → generation.ts → result.vue 三层贯通，状态全部可见' }
+  }
+  if (inBlueprint) {
+    return { level: 'partial', label: '设计存在 · 产品层未完全接入', detail: '有传播设计，但结果页/服务未完全消费或状态缺失' }
+  }
+  return { level: 'doc-only', label: '只有文档', detail: '仅有增长文档，未进入产品层' }
+})
+
+interface GlStat { key: string; label: string; ok: boolean | undefined }
+const propagationStats = computed<GlStat[]>(() => {
+  const c = growthQaChecks.value
+  const s = growthLoopSummary.value
+  return [
+    { key: 'share', label: '分享 CTA', ok: c.result_displays_share_cta ?? s.has_share_cta },
+    { key: 'unlock', label: '解锁', ok: c.result_displays_unlock ?? s.has_unlock },
+    { key: 'watermark', label: '水印', ok: c.result_displays_watermark ?? s.has_watermark },
+    { key: 'remove', label: '去水印', ok: c.result_displays_remove_watermark ?? s.remove_watermark_supported },
+    { key: 'brand', label: '品牌露出', ok: c.result_displays_brand ?? s.brand_exposure },
+    { key: 'export', label: '导出', ok: c.result_displays_export ?? s.export_supported },
+    { key: 'capability', label: '能力模式', ok: c.capability_mode_visible ?? !!s.capability_mode },
+  ]
+})
 </script>
 
 <template>
@@ -125,6 +200,24 @@ function copyArtifact(key: string) {
     <!-- Section 3: Growth -->
     <section class="section">
       <h3 class="section-heading">增长交付物</h3>
+
+      <!-- 传播闭环产品化状态（P0-2）：产品层已接入 / 只有文档 / 缺失 -->
+      <div class="propagation-card" data-testid="propagation-status" v-if="job">
+        <div class="prop-header">
+          <span class="prop-name">传播闭环（Growth Loop）</span>
+          <span class="prop-badge" :class="'prop-badge--' + propagationStatus.level">{{ propagationStatus.label }}</span>
+        </div>
+        <p class="prop-detail">{{ propagationStatus.detail }}</p>
+        <div class="prop-stats">
+          <span
+            v-for="st in propagationStats"
+            :key="st.key"
+            class="prop-stat"
+            :class="st.ok ? 'prop-stat--ok' : 'prop-stat--no'"
+          >{{ st.label }}：{{ st.ok ? '有' : '缺' }}</span>
+        </div>
+      </div>
+
       <div class="items-grid">
         <div v-for="item in GROWTH_DELIVERABLES" :key="item.key" class="item-card">
           <div class="item-header">
@@ -185,6 +278,27 @@ function copyArtifact(key: string) {
   padding-bottom: 8px;
   border-bottom: 1px solid var(--color-border);
 }
+
+/* Propagation loop productization status */
+.propagation-card {
+  background: var(--color-surface-solid);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+.prop-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.prop-name { font-size: 14px; font-weight: 600; color: var(--color-text-1); }
+.prop-badge { font-size: 11px; font-weight: 500; padding: 2px 10px; border-radius: 980px; }
+.prop-badge--ready { background: var(--color-green-subtle); color: #166534; }
+.prop-badge--partial { background: var(--color-orange-subtle); color: #92400e; }
+.prop-badge--doc-only { background: var(--color-orange-subtle); color: #92400e; }
+.prop-badge--missing { background: rgba(255, 59, 48, 0.08); color: #991b1b; }
+.prop-detail { font-size: 12px; color: var(--color-text-2); margin-bottom: 10px; }
+.prop-stats { display: flex; flex-wrap: wrap; gap: 6px; }
+.prop-stat { font-size: 11px; padding: 2px 8px; border-radius: 4px; }
+.prop-stat--ok { background: var(--color-green-subtle); color: #166534; }
+.prop-stat--no { background: rgba(0, 0, 0, 0.04); color: var(--color-text-3); }
 
 .items-grid {
   display: grid;

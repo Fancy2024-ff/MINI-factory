@@ -114,6 +114,73 @@ const SUPPORTED_PREVIEW_TYPES = new Set([
   "image", "text",
 ]);
 
+// growth_loop 必需键（与 Python GROWTH_LOOP_REQUIRED_KEYS 对齐，P0-2 parity）。
+const GROWTH_LOOP_REQUIRED_KEYS = [
+  "has_share_cta", "share_cta_label", "share_title", "share_copy",
+  "has_unlock", "unlock_type", "unlock_hint",
+  "has_watermark", "watermark_label", "remove_watermark_supported",
+  "brand_exposure", "brand_label",
+  "download_supported", "export_supported", "export_label",
+  "capability_mode", "capability_note",
+];
+const GROWTH_LOOP_CAPABILITY_MODES = new Set(["real", "fallback_preview"]);
+
+// 通用兜底 growth_loop（base/ai-* 等非 viral 模板），与 Python _generic_growth_loop 对齐。
+function genericGrowthLoop(cfg: any): any {
+  const realGeneration = !!(cfg && cfg.real_generation);
+  return {
+    has_share_cta: true,
+    share_cta_label: "分享结果",
+    share_title: (cfg && cfg.share_title) || "看看我用它生成的结果",
+    share_copy: "一键生成，分享解锁完整高清结果",
+    has_unlock: true,
+    unlock_type: "share_to_unlock",
+    unlock_hint: "分享解锁高清无水印结果",
+    has_watermark: true,
+    watermark_label: "MiniForge 水印",
+    remove_watermark_supported: true,
+    remove_watermark_condition: "分享后解锁去水印结果",
+    brand_exposure: true,
+    brand_label: "MiniForge 出品 · 结果附小程序码",
+    download_supported: realGeneration,
+    export_supported: realGeneration,
+    export_label: realGeneration ? "导出结果" : "导出入口已预留",
+    capability_mode: realGeneration ? "real" : "fallback_preview",
+    capability_note: (cfg && cfg.boundary_note)
+      || (realGeneration ? "真实生成结果，分享解锁去水印。" : "通用预览结果，非题材化真实生成。"),
+    result_layer_logic: "结果页展示生成结果 + 含水印预览，分享 CTA 引导传播，解锁后去水印。",
+  };
+}
+
+// viral 模板必须带结构化 growth_loop（与 Python _validate_growth_loop 对齐，不静默降级）。
+function validateGrowthLoop(template: string, cfg: any): void {
+  const gl = cfg.growth_loop;
+  if (!gl || typeof gl !== "object") {
+    throw new Error(`传播型模板 ${template}/template.json 缺少结构化 growth_loop 事实源（P0-2）`);
+  }
+  const miss = GROWTH_LOOP_REQUIRED_KEYS.filter((k) => !(k in gl));
+  if (miss.length) {
+    throw new Error(`${template}/template.json growth_loop 缺少键: ${miss.join(", ")}`);
+  }
+  if (!GROWTH_LOOP_CAPABILITY_MODES.has(gl.capability_mode)) {
+    throw new Error(`${template}/template.json growth_loop.capability_mode=${gl.capability_mode} 非法`);
+  }
+  // capability_mode 必须与 real_generation 一致。
+  if (cfg.real_generation === true && gl.capability_mode !== "real") {
+    throw new Error(`${template} real_generation=true 但 growth_loop.capability_mode=${gl.capability_mode}`);
+  }
+  if (cfg.real_generation === false && gl.capability_mode !== "fallback_preview") {
+    throw new Error(`${template} real_generation=false 但 growth_loop.capability_mode=${gl.capability_mode}`);
+  }
+}
+
+// 取模板 growth_loop：显式（viral）原样透传；无显式（ai-image/兜底）派生通用闭环。
+function growthLoopFromConfig(cfg: any): any {
+  const gl = cfg && cfg.growth_loop;
+  if (gl && typeof gl === "object" && Object.keys(gl).length) return gl;
+  return genericGrowthLoop(cfg || {});
+}
+
 /**
  * Resolve a template blueprint from its template.json (parity with Python
  * core/generator/blueprint_builder.py). Viral templates MUST have a valid
@@ -134,6 +201,10 @@ async function buildBlueprint(
     }
     if (!SUPPORTED_PREVIEW_TYPES.has(cfg.preview_type)) {
       throw new Error(`${template}/template.json preview_type=${cfg.preview_type} 不受支持`);
+    }
+    // viral 模板必须带结构化 growth_loop（P0-2 parity，不静默降级）。
+    if (VIRAL_TEMPLATES.has(template)) {
+      validateGrowthLoop(template, cfg);
     }
     const resultContract = (cfg.result_fields || [])
       .map((f: any) => f.id)
@@ -162,6 +233,8 @@ async function buildBlueprint(
       boundary_note: cfg.boundary_note || "",
       qa_expectation: cfg.qa_expectation || "",
       frontend_badge: cfg.frontend_badge || cfg.status_label || (realGeneration ? "核心可跑通" : "诚实预览"),
+      // 结构化传播闭环事实源（P0-2 parity）。
+      growth_loop: growthLoopFromConfig(cfg),
     };
   }
   if (VIRAL_TEMPLATES.has(template)) {
@@ -201,6 +274,8 @@ async function buildBlueprint(
     boundary_note: "通用兜底模板：当前仅提供通用文本预览，非题材化真实生成。",
     qa_expectation: "兜底模板，无强制题材分类要求。",
     frontend_badge: "通用预览",
+    // 通用兜底 growth_loop（real_generation=false 派生），与 Python 对齐。
+    growth_loop: genericGrowthLoop({ real_generation: false }),
   };
 }
 
