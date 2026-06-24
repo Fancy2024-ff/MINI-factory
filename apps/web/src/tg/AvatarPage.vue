@@ -22,17 +22,17 @@
 
       <label class="field-label">风格</label>
       <div class="chips">
-        <button v-for="s in styles" :key="s.id" class="chip" :class="{ active: style === s.id }" @click="style = s.id">{{ s.label }}</button>
+        <button v-for="s in styles" :key="s.id" class="chip" :class="{ active: style === s.id }" @click="style = style === s.id ? '' : s.id">{{ s.label }}</button>
       </div>
 
       <label class="field-label">气质</label>
       <div class="chips">
-        <button v-for="m in moods" :key="m.id" class="chip" :class="{ active: mood === m.id }" @click="mood = m.id">{{ m.label }}</button>
+        <button v-for="m in moods" :key="m.id" class="chip" :class="{ active: mood === m.id }" @click="mood = mood === m.id ? '' : m.id">{{ m.label }}</button>
       </div>
 
       <label class="field-label">场景</label>
       <div class="chips">
-        <button v-for="sc in scenes" :key="sc.id" class="chip" :class="{ active: scene === sc.id }" @click="scene = sc.id">{{ sc.label }}</button>
+        <button v-for="sc in scenes" :key="sc.id" class="chip" :class="{ active: scene === sc.id }" @click="scene = scene === sc.id ? '' : sc.id">{{ sc.label }}</button>
       </div>
 
       <button class="generate-btn" :disabled="phase === 'loading' || !prompt.trim()" @click="onGenerate">
@@ -79,9 +79,9 @@ const emit = defineEmits<{ (e: 'navigate', path: string): void }>()
 type Phase = 'form' | 'loading' | 'result' | 'error'
 
 const prompt = ref('')
-const style = ref('cinematic')
-const mood = ref('cool')
-const scene = ref('solid')
+const style = ref('')
+const mood = ref('')
+const scene = ref('')
 const aspectRatio: AspectRatio = '1:1'
 const phase = ref<Phase>('form')
 const errorMsg = ref('')

@@ -82,5 +82,9 @@ def normalize_feature_opportunity(feat: dict[str, Any]) -> dict[str, Any]:
         "viral_score": feat.get("viral_score"),
         "opportunity_score": feat.get("opportunity_score"),
         "miniapp_fit_score": feat.get("miniapp_fit_score"),
+        # 溯源（queue 消费时保留：哪条队列项、对应 feature_key）。
+        # 与旧 queue_item_to_app_input 字段名兼容，便于 queue 状态回写与测试断言。
+        "source_queue_id": feat.get("queue_id", "") or feat.get("source_queue_id", ""),
+        "source_feature_key": feat.get("feature_key", "") or feat.get("source_feature_key", ""),
     }
     return app

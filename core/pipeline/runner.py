@@ -241,8 +241,10 @@ def load_market_input(mode: str = "queue", queue_id: str | None = None) -> list[
                 )
         global _active_queue_item
         _active_queue_item = item
-        app_input = oq.queue_item_to_app_input(item)
-        return [_normalize_app(app_input)]
+        # queue item 本身就是标准 FeatureOpportunity（feature_key/parent_app_name/
+        # feature_name_cn/selected_template），直接走统一输入契约 _normalize_input，
+        # 以保留 feature 语义（input_type=feature_opportunity 等），供 PRD / codegen-report 使用。
+        return [_normalize_input(item)]
     elif mode == "real":
         apps_file = REAL_INPUTS_DIR / "apps.json"
         if not apps_file.exists():

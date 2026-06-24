@@ -45,7 +45,11 @@ def test_queue_mode_loads_feature_app(queue_env):
     assert len(apps) == 1
     app = apps[0]
     assert app["selected_template"] == "ai-image"
-    assert app["source_feature_key"] == "app_store:1:ai_photo_retouch"
+    # queue item 走统一输入契约 _normalize_input → feature 语义保留
+    assert app["input_type"] == "feature_opportunity"
+    assert app["feature_key"] == "app_store:1:ai_photo_retouch"
+    assert app["parent_app_name"] == "CapCut"
+    # 产品主体是被拆功能，不是父 App
     assert app["name_cn"] == "AI 修图"
     # 记录了当前消费项，供运行后回写
     assert runner._active_queue_item["queue_id"] == "20260623-001"

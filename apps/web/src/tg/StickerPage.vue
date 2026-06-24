@@ -22,7 +22,7 @@
 
       <label class="field-label">情绪倾向</label>
       <div class="chips">
-        <button v-for="m in moods" :key="m.id" class="chip" :class="{ active: mood === m.id }" @click="mood = m.id">{{ m.label }}</button>
+        <button v-for="m in moods" :key="m.id" class="chip" :class="{ active: mood === m.id }" @click="mood = mood === m.id ? '' : m.id">{{ m.label }}</button>
       </div>
 
       <button class="generate-btn" :disabled="phase === 'loading' || !prompt.trim()" @click="onGenerate">
@@ -70,7 +70,7 @@ const emit = defineEmits<{ (e: 'navigate', path: string): void }>()
 type Phase = 'form' | 'loading' | 'result' | 'error'
 
 const prompt = ref('')
-const mood = ref('搞笑')
+const mood = ref('')
 const phase = ref<Phase>('form')
 const errorMsg = ref('')
 const retryable = ref(false)

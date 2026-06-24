@@ -26,7 +26,7 @@
           :key="s.id"
           class="chip"
           :class="{ active: style === s.id }"
-          @click="style = s.id"
+          @click="style = style === s.id ? '' : s.id"
         >{{ s.label }}</button>
       </div>
 
@@ -89,7 +89,7 @@ const emit = defineEmits<{ (e: 'navigate', path: string): void }>()
 type Phase = 'form' | 'loading' | 'result' | 'error'
 
 const prompt = ref('')
-const style = ref('realistic')
+const style = ref('')
 const aspectRatio = ref<AspectRatio>('1:1')
 const phase = ref<Phase>('form')
 const errorMsg = ref('')
