@@ -7,6 +7,7 @@ import AiImagePage from '../tg/AiImagePage.vue'
 import AvatarPage from '../tg/AvatarPage.vue'
 import StickerPage from '../tg/StickerPage.vue'
 import PetTalkPage from '../tg/PetTalkPage.vue'
+import BgRemovePage from '../tg/BgRemovePage.vue'
 
 beforeEach(() => {
   // 默认无 Telegram WebApp 对象（普通浏览器场景）
@@ -32,9 +33,17 @@ describe('TgHome', () => {
     expect(text).toContain('AI 头像')
     expect(text).toContain('表情包工厂')
     expect(text).toContain('宠物说话')
+    expect(text).toContain('背景去除')
     expect(text).toContain('新上线')
-    // 四张可点击的已开放卡片（ai-image + avatar + sticker + pet-talk）
-    expect(w.findAll('.card-open').length).toBe(4)
+    // 五张可点击的已开放卡片（ai-image + avatar + sticker + pet-talk + bg-remove）
+    expect(w.findAll('.card-open').length).toBe(5)
+  })
+
+  it('emits navigate to /tg/bg-remove when background-removal card clicked', async () => {
+    const w = mount(TgHome)
+    const cards = w.findAll('.card-open')
+    await cards[4].trigger('click')
+    expect(w.emitted('navigate')?.[0]).toEqual(['/tg/bg-remove'])
   })
 
   it('emits navigate to /tg/ai-image when first open card clicked', async () => {
@@ -96,12 +105,63 @@ describe('AiImagePage', () => {
     expect(img.attributes('src')).toBe('data:image/jpeg;base64,QUJD')
   })
 
-  it('shows a friendly error when generation fails', async () => {
+  it('keeps showing the loading spinner (NOT an error) while a retryable failure is retried, then shows the image once it succeeds', async () => {
+    // provider 偶发失败（retryable）：前两次失败，第三次成功。
+    // 期望：全程不出现 error-box / 失败文案，最终出图。
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: false,
+          error: { code: 'IMAGE_GENERATION_PROVIDER_FAILED', message: '图片生成失败，请稍后再试', retryable: true },
+        }),
+      } as any)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: false,
+          error: { code: 'IMAGE_GENERATION_PROVIDER_FAILED', message: '图片生成失败，请稍后再试', retryable: true },
+        }),
+      } as any)
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          result: { preview_type: 'image', image_base64: 'QUJD', prompt: 'cat', title: 'AI 图片生成' },
+        }),
+      } as any)
+    vi.stubGlobal('fetch', fetchMock)
+    vi.useFakeTimers()
+
+    const w = mount(AiImagePage)
+    await w.find('.prompt-input').setValue('一只猫')
+    await w.find('.generate-btn').trigger('click')
+
+    // 第一次失败后：仍在 loading，绝不显示错误。
+    await vi.advanceTimersByTimeAsync(0)
+    await nextTick()
+    expect(w.find('.loading').exists()).toBe(true)
+    expect(w.find('.error-box').exists()).toBe(false)
+    expect(w.text()).not.toContain('图片生成失败')
+
+    // 推进退避计时器，让后台重试跑到成功。
+    await vi.advanceTimersByTimeAsync(10000)
+    await nextTick()
+
+    expect(w.find('.error-box').exists()).toBe(false)
+    const img = w.find('.result-img')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toBe('data:image/jpeg;base64,QUJD')
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3)
+    vi.useRealTimers()
+  })
+
+  it('shows a friendly error only for a non-retryable (config) failure', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
         ok: false,
-        error: { code: 'IMAGE_GENERATION_PROVIDER_FAILED', message: '图片生成失败，请稍后再试', retryable: true },
+        error: { code: 'IMAGE_GENERATION_NOT_CONFIGURED', message: '服务暂时不可用', retryable: false },
       }),
     } as any))
 
@@ -112,8 +172,45 @@ describe('AiImagePage', () => {
     await nextTick()
 
     expect(w.find('.error-box').exists()).toBe(true)
-    expect(w.text()).toContain('图片生成失败')
     expect(w.find('.result-img').exists()).toBe(false)
+  })
+
+  it('does NOT show "Image result is missing" — MALFORMED_RESPONSE (retryable:false) is retried silently', async () => {
+    // 复现截图 bug：后端把 provider 偶发空图标成 MALFORMED_RESPONSE + retryable:false，
+    // 前端不能信任该字段，应继续静默重试，绝不把 "Image result is missing" 显示给用户。
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: false,
+          error: { code: 'IMAGE_GENERATION_MALFORMED_RESPONSE', message: 'Image result is missing.', retryable: false },
+        }),
+      } as any)
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          result: { preview_type: 'image', image_base64: 'QUJD', prompt: 'cat', title: 'AI 图片生成' },
+        }),
+      } as any)
+    vi.stubGlobal('fetch', fetchMock)
+    vi.useFakeTimers()
+
+    const w = mount(AiImagePage)
+    await w.find('.prompt-input').setValue('一只猫')
+    await w.find('.generate-btn').trigger('click')
+    await vi.advanceTimersByTimeAsync(0)
+    await nextTick()
+    // 第一次 MALFORMED 后：仍转圈，不显示该英文报错。
+    expect(w.find('.loading').exists()).toBe(true)
+    expect(w.find('.error-box').exists()).toBe(false)
+    expect(w.text()).not.toContain('Image result is missing')
+
+    await vi.advanceTimersByTimeAsync(10000)
+    await nextTick()
+    expect(w.find('.error-box').exists()).toBe(false)
+    expect(w.find('.result-img').exists()).toBe(true)
+    vi.useRealTimers()
   })
 })
 
@@ -157,7 +254,7 @@ describe('AvatarPage', () => {
     expect(img.attributes('src')).toBe('data:image/jpeg;base64,QUJD')
   })
 
-  it('shows a friendly error when avatar generation fails', async () => {
+  it('does NOT show an error on a retryable avatar failure — stays loading and retries silently', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -172,8 +269,10 @@ describe('AvatarPage', () => {
     await new Promise((r) => setTimeout(r, 0))
     await nextTick()
 
-    expect(w.find('.error-box').exists()).toBe(true)
-    expect(w.text()).toContain('生成失败')
+    // 可重试失败：保持转圈，绝不显示错误或失败文案。
+    expect(w.find('.loading').exists()).toBe(true)
+    expect(w.find('.error-box').exists()).toBe(false)
+    expect(w.text()).not.toContain('生成失败')
     expect(w.find('.result-img').exists()).toBe(false)
   })
 })
@@ -253,5 +352,69 @@ describe('PetTalkPage', () => {
     expect(img.exists()).toBe(true)
     expect(w.find('.preview-badge').exists()).toBe(true)
     expect(w.text()).toContain('视频生成流程预留')
+  })
+})
+
+describe('BgRemovePage', () => {
+  function setFile(w: any) {
+    const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' })
+    // jsdom 没有真实 file input；直接设组件内部 sourceFile 触发可生成态。
+    ;(w.vm as any).sourceFile = blob
+    ;(w.vm as any).sourcePreview = 'blob:fake'
+  }
+
+  it('renders the uploader form', () => {
+    const w = mount(BgRemovePage)
+    expect(w.find('.uploader').exists()).toBe(true)
+    expect(w.text()).toContain('背景去除')
+    expect(w.find('.result').exists()).toBe(false)
+  })
+
+  it('shows the cut-out image after a successful background removal', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: { preview_type: 'image', image_base64: 'QUJD', title: '背景去除' },
+      }),
+    } as any))
+
+    const w = mount(BgRemovePage)
+    setFile(w)
+    await nextTick()
+    await (w.vm as any).onRemove()
+    await nextTick()
+
+    const img = w.find('.result-img')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toBe('data:image/jpeg;base64,QUJD')
+  })
+
+  it('retries silently on a retryable edit failure — no error shown', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: false, error: { code: 'IMAGE_GENERATION_MALFORMED_RESPONSE', message: 'Image result is missing.', retryable: false } }),
+      } as any)
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ ok: true, result: { preview_type: 'image', image_base64: 'QUJD', title: '背景去除' } }),
+      } as any)
+    vi.stubGlobal('fetch', fetchMock)
+    vi.useFakeTimers()
+
+    const w = mount(BgRemovePage)
+    setFile(w)
+    const p = (w.vm as any).onRemove()
+    await vi.advanceTimersByTimeAsync(0)
+    await nextTick()
+    expect(w.find('.loading').exists()).toBe(true)
+    expect(w.text()).not.toContain('Image result is missing')
+
+    await vi.advanceTimersByTimeAsync(10000)
+    await p
+    await nextTick()
+    expect(w.find('.result-img').exists()).toBe(true)
+    vi.useRealTimers()
   })
 })

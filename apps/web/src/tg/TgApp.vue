@@ -6,6 +6,7 @@
     <AvatarPage v-else-if="route === '/tg/avatar'" @navigate="navigate" />
     <StickerPage v-else-if="route === '/tg/sticker'" @navigate="navigate" />
     <PetTalkPage v-else-if="route === '/tg/pet-talk'" @navigate="navigate" />
+    <BgRemovePage v-else-if="route === '/tg/bg-remove'" @navigate="navigate" />
     <TgHome v-else @navigate="navigate" />
   </div>
 </template>
@@ -17,6 +18,7 @@ import AiImagePage from './AiImagePage.vue'
 import AvatarPage from './AvatarPage.vue'
 import StickerPage from './StickerPage.vue'
 import PetTalkPage from './PetTalkPage.vue'
+import BgRemovePage from './BgRemovePage.vue'
 import { initTelegram } from './telegram'
 import { normalizeRoute } from './route'
 

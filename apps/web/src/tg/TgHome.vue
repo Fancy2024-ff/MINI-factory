@@ -44,6 +44,15 @@
         <div class="badge badge-new">新上线</div>
       </button>
 
+      <button class="card card-open" @click="openBgRemove">
+        <div class="card-icon">✂️</div>
+        <div class="card-body">
+          <div class="card-title">背景去除</div>
+          <div class="card-desc">上传图片，一键抠图去背景</div>
+        </div>
+        <div class="badge badge-new">新上线</div>
+      </button>
+
       <div v-for="item in upcoming" :key="item.id" class="card card-soon">
         <div class="card-icon">{{ item.icon }}</div>
         <div class="card-body">
@@ -79,6 +88,10 @@ function openSticker() {
 
 function openPetTalk() {
   emit('navigate', '/tg/pet-talk')
+}
+
+function openBgRemove() {
+  emit('navigate', '/tg/bg-remove')
 }
 </script>
 

@@ -55,7 +55,7 @@
     <!-- loading 占位 -->
     <section class="loading" v-if="phase === 'loading'">
       <div class="spinner"></div>
-      <div class="loading-text">正在生成，请稍候…</div>
+      <div class="loading-text">{{ loadingText }}</div>
     </section>
 
     <!-- 结果 -->
@@ -80,7 +80,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { generateImage, toDisplayImage, MAX_PROMPT_LEN } from './tgApi'
+import { generateImage, toDisplayImage, MAX_PROMPT_LEN, retryDelay, sleep, isFatalError } from './tgApi'
 import { haptic, shareInTelegram, isInTelegram } from './telegram'
 import type { AspectRatio, DisplayImage } from './types'
 
@@ -96,6 +96,10 @@ const errorMsg = ref('')
 const retryable = ref(false)
 const display = ref<DisplayImage | null>(null)
 const toast = ref('')
+const loadingText = ref('正在生成，请稍候…')
+
+// 轮播的“生成中”文案，全部正向，绝不暗示失败。
+const LOADING_MSGS = ['正在生成，请稍候…', 'AI 正在创作中…', '正在精修画面细节…', '马上就好…']
 
 const styles = [
   { id: 'realistic', label: '写实' },
@@ -120,20 +124,36 @@ async function onGenerate() {
   phase.value = 'loading'
   errorMsg.value = ''
   haptic('light')
-  const resp = await generateImage({
-    template_id: 'ai-image',
-    prompt: p,
-    style: style.value,
-    aspect_ratio: aspectRatio.value,
-  })
-  if (resp.ok && resp.result) {
-    const d = toDisplayImage(resp.result)
-    if (d) { display.value = d; phase.value = 'result'; haptic('medium'); return }
-    errorMsg.value = '生成结果异常，请重试'; retryable.value = true; phase.value = 'error'; return
+
+  // 出图 provider 偶发失败：后台静默重试直到成功，用户只看到“生成中”转圈，
+  // 绝不展示任何失败文案。仅配置类错误（retryable === false）才停止并提示。
+  let attempt = 0
+  while (phase.value === 'loading') {
+    attempt++
+    loadingText.value = LOADING_MSGS[Math.min(attempt - 1, LOADING_MSGS.length - 1)]
+    const resp = await generateImage({
+      template_id: 'ai-image',
+      prompt: p,
+      style: style.value,
+      aspect_ratio: aspectRatio.value,
+    })
+    if (resp.ok && resp.result) {
+      const d = toDisplayImage(resp.result)
+      if (d) { display.value = d; phase.value = 'result'; haptic('medium'); return }
+      // 结果缺图：当作可重试的瞬时失败，继续后台重试，不打扰用户。
+      await sleep(retryDelay(attempt))
+      continue
+    }
+    // 配置类错误无法靠重试解决：停止并给中性提示。
+    if (isFatalError(resp.error?.code)) {
+      errorMsg.value = resp.error?.message || '服务暂时不可用'
+      retryable.value = false
+      phase.value = 'error'
+      return
+    }
+    // 其余（provider 抽风/空图/超时/网络/限流）：静默退避后重试，保持转圈。
+    await sleep(retryDelay(attempt))
   }
-  errorMsg.value = resp.error?.message || '生成失败，请稍后再试'
-  retryable.value = resp.error?.retryable ?? true
-  phase.value = 'error'
 }
 
 function regenerate() { phase.value = 'form'; display.value = null }

@@ -70,7 +70,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { generateTemplate, templateResultToDisplay, MAX_PROMPT_LEN } from './tgApi'
+import { generateTemplate, templateResultToDisplay, MAX_PROMPT_LEN, retryDelay, sleep, isFatalError } from './tgApi'
 import { haptic } from './telegram'
 import type { AspectRatio, DisplayImage } from './types'
 
@@ -122,18 +122,25 @@ async function onGenerate() {
   phase.value = 'loading'
   errorMsg.value = ''
   haptic('light')
-  const resp = await generateTemplate({
-    template_id: 'avatar-viral',
-    input: { prompt: p, style: style.value, mood: mood.value, scene: scene.value, aspect_ratio: aspectRatio },
-  })
-  if (resp.ok && resp.result) {
-    const d = templateResultToDisplay(resp.result)
-    if (d) { display.value = d; phase.value = 'result'; haptic('medium'); return }
-    errorMsg.value = '生成结果异常，请重试'; retryable.value = true; phase.value = 'error'; return
+  // 出图偶发失败：后台静默重试直到成功，用户只看到转圈，不展示失败文案。
+  // 仅配置类错误（retryable === false）才停止并提示。
+  let attempt = 0
+  while (phase.value === 'loading') {
+    attempt++
+    const resp = await generateTemplate({
+      template_id: 'avatar-viral',
+      input: { prompt: p, style: style.value, mood: mood.value, scene: scene.value, aspect_ratio: aspectRatio },
+    })
+    if (resp.ok && resp.result) {
+      const d = templateResultToDisplay(resp.result)
+      if (d) { display.value = d; phase.value = 'result'; haptic('medium'); return }
+      await sleep(retryDelay(attempt)); continue
+    }
+    if (isFatalError(resp.error?.code)) {
+      errorMsg.value = resp.error?.message || '服务暂时不可用'; retryable.value = false; phase.value = 'error'; return
+    }
+    await sleep(retryDelay(attempt))
   }
-  errorMsg.value = resp.error?.message || '生成失败，请稍后再试'
-  retryable.value = resp.error?.retryable ?? true
-  phase.value = 'error'
 }
 
 function regenerate() { phase.value = 'form'; display.value = null }

@@ -6,6 +6,7 @@ export type TgRoute =
   | '/tg/avatar'
   | '/tg/sticker'
   | '/tg/pet-talk'
+  | '/tg/bg-remove'
 
 export function normalizeRoute(path: string): TgRoute {
   const p = (path || '/tg').replace(/\/+$/, '') || '/tg'
@@ -13,5 +14,6 @@ export function normalizeRoute(path: string): TgRoute {
   if (p === '/tg/avatar') return '/tg/avatar'
   if (p === '/tg/sticker') return '/tg/sticker'
   if (p === '/tg/pet-talk') return '/tg/pet-talk'
+  if (p === '/tg/bg-remove') return '/tg/bg-remove'
   return '/tg'
 }

@@ -16,6 +16,29 @@ const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 export const MAX_PROMPT_LEN = 500
 
+// 重试退避：快速起步咬住成功窗口，封顶 5s。
+export function retryDelay(attempt: number): number {
+  return Math.min(600 + attempt * 500, 5000)
+}
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+// 只有这些“真·永久错误”才停止重试并提示用户——重试再多也没用：
+// 后端未配置 provider、鉴权失败。其余（provider 抽风返回空图 MALFORMED、
+// 超时 TIMEOUT、服务暂时不可用 PROVIDER_FAILED、网络）都视为瞬时失败，静默重试。
+// 注意：不直接信任后端的 retryable 字段——后端把 MALFORMED_RESPONSE 误标为
+// retryable=false，但它其实是 provider 偶发空响应，应当继续重试。
+const FATAL_ERROR_CODES = new Set<string>([
+  'IMAGE_GENERATION_NOT_CONFIGURED',
+  'IMAGE_GENERATION_AUTH_FAILED',
+])
+
+export function isFatalError(code: string | undefined): boolean {
+  return !!code && FATAL_ERROR_CODES.has(code)
+}
+
 export async function generateImage(
   req: GenerateImageRequest,
 ): Promise<GenerateImageResponse> {
@@ -34,6 +57,36 @@ export async function generateImage(
     return (await res.json()) as GenerateImageResponse
   } catch {
     // 网络错误，不泄露内部细节
+    return {
+      ok: false,
+      error: { code: 'NETWORK_ERROR', message: '网络异常，请检查连接后重试', retryable: true },
+    }
+  }
+}
+
+// 图像编辑（背景去除等 image-to-image）：上传图片到后端 /api/generation/image-edit。
+// 后端调 provider /images/edits；key 留服务器。返回与 generateImage 同形。
+export async function editImage(
+  file: Blob,
+  opts: { task?: string; prompt?: string; filename?: string } = {},
+): Promise<GenerateImageResponse> {
+  try {
+    const form = new FormData()
+    form.append('image', file, opts.filename || 'image.png')
+    form.append('task', opts.task || 'background_remove')
+    if (opts.prompt) form.append('prompt', opts.prompt)
+    const res = await fetch(`${BASE}/api/generation/image-edit`, {
+      method: 'POST',
+      body: form,
+    })
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: { code: 'HTTP_ERROR', message: '服务暂时不可用，请稍后再试', retryable: true },
+      }
+    }
+    return (await res.json()) as GenerateImageResponse
+  } catch {
     return {
       ok: false,
       error: { code: 'NETWORK_ERROR', message: '网络异常，请检查连接后重试', retryable: true },
