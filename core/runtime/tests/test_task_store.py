@@ -397,3 +397,20 @@ def test_health_summary_oldest_pending_positive(store):
         store._close(conn)
     h = store.health_summary()
     assert h["oldest_pending_seconds"] >= 110  # 约 120，留宽容
+
+
+def test_maintenance_lock_resumes_after_acquirer_crash(store):
+    """worker 抢到维护后崩溃（last_run_at 已写）：超过 interval 后下一次维护仍能继续。
+
+    try_acquire_maintenance 不持有 locked_until/TTL，只记录 last_run_at（节流而非互斥锁），
+    因此没有"抢到后崩溃导致永久卡死"的风险——最多延迟一个 interval。
+    """
+    from core.runtime.task_store import _add_seconds
+    now = now_iso()
+    # w1 抢到维护权（随后"崩溃"，没做完回收）
+    assert store.try_acquire_maintenance("stale_recovery", 60, "w1", now=now) is True
+    # interval 内：维护被节流，不重复跑（符合预期）
+    assert store.try_acquire_maintenance("stale_recovery", 60, "w2", now=now) is False
+    # 超过 interval 后：维护自动恢复，w2 抢到，继续回收（不会因 w1 崩溃永久卡死）
+    later = _add_seconds(now, 61)
+    assert store.try_acquire_maintenance("stale_recovery", 60, "w2", now=later) is True

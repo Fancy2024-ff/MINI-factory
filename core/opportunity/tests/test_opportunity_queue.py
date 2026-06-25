@@ -95,3 +95,20 @@ def test_update_status_failed_increments_retry():
     assert q[0]["status"] == "failed"
     assert q[0]["retry_count"] == 1
     assert "boom" in q[0]["last_error"]
+
+
+def test_produced_feature_key_not_requeued_on_rebuild():
+    """已 produced 的 feature_key 在重新 build_queue 时不再进入 pending。
+
+    这是 feature_key 层去重的关键保证：即便同一 feature 在后续 crawl 重新出现，
+    is_processed 会拦截，不会生成新的 pending queue item，因此任务层（queue_id 去重）
+    不会收到同一 feature 的第二个可消费项。两层叠加 → 同一 feature 不会重复 active 执行。
+    """
+    # 首次：两个 feature 都入队
+    q1 = build_queue(_ranked(), processed={"features": {}}, date_str="20260623")
+    assert {i["feature_key"] for i in q1} == {
+        "app_store:1:ai_photo_retouch", "app_store:1:avatar"}
+    # 标记其一已生产后重建：该 feature_key 不再入 pending
+    processed = {"features": {"app_store:1:ai_photo_retouch": {"status": "produced"}}}
+    q2 = build_queue(_ranked(), processed=processed, date_str="20260624")
+    assert "app_store:1:ai_photo_retouch" not in {i["feature_key"] for i in q2}
