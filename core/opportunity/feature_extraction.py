@@ -16,7 +16,7 @@ _DOABLE_FEATURES = [
      "ai-image", ["image_generation", "image_enhancement"], "medium", 86, 78),
     ("background_remover", "Background remover", "背景去除",
      ["background remover", "remove background", "抠图", "背景去除", "cutout"],
-     "ai-image", ["image_generation"], "easy", 88, 72),
+     "background-remover", ["image_generation"], "easy", 88, 72),
     ("photo_enhancer", "Photo enhancer", "图片增强",
      ["enhancer", "增强", "high resolution", "old photo", "老照片", "修复", "upscale"],
      "ai-image", ["image_generation", "image_enhancement"], "medium", 84, 70),

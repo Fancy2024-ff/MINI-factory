@@ -71,3 +71,16 @@ def test_unrelated_app_yields_nothing_doable():
     cand = {"canonical_key": "k", "name": "Bank", "description": "mobile banking and finance"}
     feats = extract_features(cand)
     assert all(not f["production_recommended"] for f in feats)
+
+
+def test_background_remover_maps_to_background_remover_template():
+    candidate = {
+        "canonical_key": "app_store:com.x.sticker",
+        "name": "Sticker Maker",
+        "description": "background remover and cutout tool",
+        "features": ["background remover"],
+    }
+    feats = extract_features(candidate)
+    bg = [f for f in feats if "background" in f["feature_name"].lower()]
+    assert bg, "background_remover feature should be extracted"
+    assert bg[0]["selected_template"] == "background-remover"
