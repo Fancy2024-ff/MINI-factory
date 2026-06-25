@@ -357,3 +357,43 @@ def test_find_active_by_queue_id_dedupes(store):
     # 完成后不再 active
     store.complete_task(tid, result={})
     assert store.find_active_by_queue_id("q-dup-1") is None
+
+
+# --- A4a: health_summary 健康指标 ---
+
+def test_health_summary_empty(store):
+    h = store.health_summary()
+    for key in ("total", "pending", "running", "succeeded", "failed", "cancelled",
+                "oldest_pending_seconds", "running_count", "active_worker_count"):
+        assert key in h
+    assert h["total"] == 0
+    assert h["pending"] == 0
+    assert h["oldest_pending_seconds"] == 0
+    assert h["active_worker_count"] == 0
+
+
+def test_health_summary_counts_and_running(store):
+    store.enqueue_task(TaskKind.PIPELINE_RUN)          # pending
+    store.enqueue_task(TaskKind.PIPELINE_RUN)
+    store.claim_next_task("w1")                         # 领一个 -> running
+    h = store.health_summary()
+    assert h["total"] == 2
+    assert h["running"] == 1
+    assert h["pending"] == 1
+    assert h["running_count"] == 1
+    # 有一个 fresh 锁的 worker：active_worker_count 计入
+    assert h["active_worker_count"] == 1
+
+
+def test_health_summary_oldest_pending_positive(store):
+    from core.runtime.task_store import _add_seconds
+    tid = store.enqueue_task(TaskKind.PIPELINE_RUN)
+    # 把 created_at 改早 120 秒，模拟等待
+    conn = store._conn()
+    try:
+        old = _add_seconds(now_iso(), -120)
+        conn.execute("UPDATE tasks SET created_at = ? WHERE id = ?", (old, tid))
+    finally:
+        store._close(conn)
+    h = store.health_summary()
+    assert h["oldest_pending_seconds"] >= 110  # 约 120，留宽容

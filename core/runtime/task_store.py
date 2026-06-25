@@ -635,6 +635,54 @@ class TaskStore:
         finally:
             self._close(conn)
 
+    def health_summary(self) -> dict:
+        """队列健康指标（供 /api/tasks/health 与 dashboard）。
+
+        返回：各状态计数 + total；oldest_pending_seconds（最老 pending 等待秒数）；
+        running_count；active_worker_count（近似：locked_until 未过期的不同 locked_by 数，
+        即仍在 heartbeat 续租的活跃 worker）。
+        """
+        now = tm.now_iso()
+        conn = self._conn()
+        try:
+            by_status = {s: 0 for s in TaskStatus.ALL}
+            for r in conn.execute("SELECT status, COUNT(*) AS n FROM tasks GROUP BY status"):
+                by_status[r["status"]] = r["n"]
+            total = sum(by_status.values())
+            # 最老 pending 等待秒数：取 min(created_at) 的 pending。
+            oldest_row = conn.execute(
+                "SELECT MIN(created_at) AS oldest FROM tasks WHERE status = ?",
+                (TaskStatus.PENDING,),
+            ).fetchone()
+            oldest_pending_seconds = 0
+            if oldest_row and oldest_row["oldest"]:
+                from datetime import datetime
+                delta = datetime.fromisoformat(now) - datetime.fromisoformat(oldest_row["oldest"])
+                oldest_pending_seconds = max(0, int(delta.total_seconds()))
+            # 活跃 worker 近似：running 且锁未过期的不同 locked_by 数。
+            worker_row = conn.execute(
+                """
+                SELECT COUNT(DISTINCT locked_by) AS n FROM tasks
+                WHERE status = ? AND locked_by IS NOT NULL
+                  AND locked_until IS NOT NULL AND locked_until > ?
+                """,
+                (TaskStatus.RUNNING, now),
+            ).fetchone()
+            active_worker_count = worker_row["n"] if worker_row else 0
+            return {
+                "total": total,
+                "pending": by_status[TaskStatus.PENDING],
+                "running": by_status[TaskStatus.RUNNING],
+                "succeeded": by_status[TaskStatus.SUCCEEDED],
+                "failed": by_status[TaskStatus.FAILED],
+                "cancelled": by_status[TaskStatus.CANCELLED],
+                "oldest_pending_seconds": oldest_pending_seconds,
+                "running_count": by_status[TaskStatus.RUNNING],
+                "active_worker_count": active_worker_count,
+            }
+        finally:
+            self._close(conn)
+
 
 # --- 模块级单例（默认库），供 API / worker 复用 ---
 _default_store: TaskStore | None = None
