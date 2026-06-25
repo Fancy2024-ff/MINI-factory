@@ -6,6 +6,7 @@ task 白名单是「已用真实后端验证过名副其实」的集合（设计
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -19,8 +20,14 @@ _ICON_BY_ABILITY = {"text2img": "🖼", "img2img": "✂️"}
 
 
 def _slug(s: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
-    return s or "feature"
+    """转 url-safe slug。纯非 ASCII 输入（如全中文）清洗后为空，
+    用原串的稳定短哈希兜底，保证不同输入得到不同 id（避免 id 塌缩、路由冲突）。"""
+    original = s or ""
+    slug = re.sub(r"[^a-z0-9]+", "-", original.lower()).strip("-")
+    if slug:
+        return slug
+    digest = hashlib.sha1(original.encode("utf-8")).hexdigest()[:8]
+    return f"feature-{digest}"
 
 
 def build_feature_config(feature_key: str, best_app: dict, selection: dict) -> dict:

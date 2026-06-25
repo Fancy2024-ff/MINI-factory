@@ -7,9 +7,22 @@ from core.publisher.feature_registry import (
     build_feature_config,
     validate_feature,
     append_feature,
+    _slug,
     ABILITY_WHITELIST,
     TASK_WHITELIST,
 )
+
+
+def test_slug_non_ascii_keys_stay_unique_and_urlsafe():
+    """全中文 feature_key 不应塌缩为同一个常量 id（否则去重把不同功能吞掉、路由冲突）。"""
+    import re
+    a = _slug("表情包")
+    b = _slug("祝福视频")
+    assert a != b, "不同中文 key 必须得到不同 id"
+    for s in (a, b):
+        assert re.fullmatch(r"[a-z0-9-]+", s), f"id 必须 url-safe: {s}"
+    # 稳定：同输入同输出
+    assert _slug("表情包") == a
 
 
 def test_build_from_app_and_selection():
