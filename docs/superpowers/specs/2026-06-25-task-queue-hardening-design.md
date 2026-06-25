@@ -2,7 +2,7 @@
 
 - 日期：2026-06-25
 - 分支：refactor/core-capability-domains
-- 状态：待实现（A 阶段先行，B 阶段仅计划）
+- 状态：A 阶段已完成，B 阶段待评估
 
 ## 目标
 
