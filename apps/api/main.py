@@ -1386,12 +1386,17 @@ async def edit_image_endpoint(
         return {"ok": False, "error": {"code": ERR_FAILED, "message": "图片处理失败，请稍后重试", "retryable": True}}
 
     import time as _t
+    _edit_labels = {
+        "background_remove": ("背景去除", "已移除背景"),
+        "watermark_remove": ("去水印", "已去除水印"),
+    }
+    _title, _caption = _edit_labels.get(task, ("图片处理", "处理完成"))
     return {
         "ok": True,
         "result": {
             "preview_type": "image",
-            "title": "背景去除",
-            "caption": "已移除背景",
+            "title": _title,
+            "caption": _caption,
             "image_url": result.get("image_url"),
             "image_base64": result.get("image_base64"),
             "prompt": result.get("prompt"),
