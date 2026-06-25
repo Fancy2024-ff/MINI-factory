@@ -57,6 +57,12 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_claim ON tasks (status, priority, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_locked_until ON tasks (locked_until);
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at);
+
+CREATE TABLE IF NOT EXISTS queue_maintenance (
+    name        TEXT PRIMARY KEY,
+    last_run_at TEXT,
+    runner      TEXT
+);
 """
 
 # queue_id / job_id 是后加的列；旧库需 ALTER 补列（sqlite 无 IF NOT EXISTS for column）。
@@ -222,6 +228,42 @@ class TaskStore:
                 (job_id, TaskStatus.PENDING, TaskStatus.RUNNING),
             ).fetchone()
             return _row_to_dict(row) if row else None
+        finally:
+            self._close(conn)
+
+    def try_acquire_maintenance(
+        self, name: str, interval_seconds: int, worker_id: str, now: str | None = None
+    ) -> bool:
+        """多 worker 维护抢占锁：距上次运行已超过 interval 才允许执行，返回是否抢到。
+
+        用一次 BEGIN IMMEDIATE 写事务做 CAS：先 UPSERT 占位行（首次），再带
+        last_run_at 条件 UPDATE。rowcount>0 表示本 worker 抢到了这一轮维护权。
+        复用现有串行化保证，多 worker 同一时刻只有一个返回 True。
+        """
+        now = now or tm.now_iso()
+        threshold = _add_seconds(now, -interval_seconds)
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            # 首次：插入占位行（last_run_at=NULL，表示从未跑过）。
+            conn.execute(
+                "INSERT OR IGNORE INTO queue_maintenance (name, last_run_at, runner) "
+                "VALUES (?, NULL, NULL)",
+                (name,),
+            )
+            cur = conn.execute(
+                """
+                UPDATE queue_maintenance
+                SET last_run_at = ?, runner = ?
+                WHERE name = ? AND (last_run_at IS NULL OR last_run_at <= ?)
+                """,
+                (now, worker_id, name, threshold),
+            )
+            conn.execute("COMMIT")
+            return cur.rowcount > 0
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
         finally:
             self._close(conn)
 

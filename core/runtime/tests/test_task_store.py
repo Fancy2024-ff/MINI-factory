@@ -268,3 +268,46 @@ def test_legacy_db_migration(tmp_path):
     tid = s.enqueue_task(TaskKind.PIPELINE_RUN, queue_id="q-new", job_id="j-new")
     assert s.get_task(tid)["queue_id"] == "q-new"
     assert s.get_task("old1")["queue_id"] is None  # 旧行迁移后列为 NULL
+
+
+# --- A1: 维护抢占锁 queue_maintenance ---
+
+def test_maintenance_lock_first_acquire_succeeds(store):
+    now = now_iso()
+    assert store.try_acquire_maintenance("stale_recovery", 60, "w1", now=now) is True
+
+
+def test_maintenance_lock_within_interval_blocked(store):
+    now = now_iso()
+    assert store.try_acquire_maintenance("stale_recovery", 60, "w1", now=now) is True
+    # 同一时刻再抢：interval 未到，拒绝
+    assert store.try_acquire_maintenance("stale_recovery", 60, "w2", now=now) is False
+
+
+def test_maintenance_lock_after_interval_reacquire(store):
+    from core.runtime.task_store import _add_seconds
+    now = now_iso()
+    assert store.try_acquire_maintenance("stale_recovery", 60, "w1", now=now) is True
+    later = _add_seconds(now, 61)  # 超过 interval
+    assert store.try_acquire_maintenance("stale_recovery", 60, "w2", now=later) is True
+
+
+def test_maintenance_lock_concurrent_single_winner(tmp_path):
+    import threading
+    store = TaskStore(tmp_path / "tasks.sqlite3")
+    now = now_iso()
+    results = []
+    lock = threading.Lock()
+
+    def worker(wid):
+        ok = store.try_acquire_maintenance("stale_recovery", 60, wid, now=now)
+        with lock:
+            results.append(ok)
+
+    threads = [threading.Thread(target=worker, args=(f"w{i}",)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    # 并发 8 个 worker 同一时刻抢，恰好一个成功
+    assert results.count(True) == 1
