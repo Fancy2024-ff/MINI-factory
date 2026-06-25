@@ -53,6 +53,20 @@
         <div class="badge badge-new">新上线</div>
       </button>
 
+      <button
+        v-for="f in generatedFeatures"
+        :key="f.id"
+        class="card card-open"
+        @click="emit('navigate', '/tg/gen/' + f.id)"
+      >
+        <div class="card-icon">{{ f.icon }}</div>
+        <div class="card-body">
+          <div class="card-title">{{ f.title }}</div>
+          <div class="card-desc">{{ f.subtitle }}</div>
+        </div>
+        <div class="badge badge-new">新上线</div>
+      </button>
+
       <div v-for="item in upcoming" :key="item.id" class="card card-soon">
         <div class="card-icon">{{ item.icon }}</div>
         <div class="card-body">
@@ -68,6 +82,9 @@
 </template>
 
 <script setup lang="ts">
+import { getGeneratedFeatures } from './registry/featureRegistry'
+const generatedFeatures = getGeneratedFeatures()
+
 const emit = defineEmits<{ (e: 'navigate', path: string): void }>()
 
 const upcoming = [
