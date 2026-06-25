@@ -131,3 +131,20 @@ def classify(app: dict, viral: dict | None = None) -> dict:
         "rationale": rationale,
         "data_source": "demo_rule_based",
     }
+
+
+# template -> (ability, task)。ability 决定页面壳，task 决定后端意图。
+# v1 白名单 task 只含已验证名副其实的两个；其余落 "pending"（不自动上线）。
+_TEMPLATE_ABILITY_TASK = {
+    "ai-image": ("text2img", "generate_image"),
+    "background-remover": ("img2img", "background_remove"),
+}
+
+
+def template_to_ability_task(template: str) -> tuple[str, str]:
+    """把 classifier 选出的 template 映射为合集渲染所需的 (ability, task)。
+
+    不在 v1 白名单的 template -> ("text2img", "pending")：仍可渲染壳，
+    但 task=pending 表示后端意图未经验证，registry 校验会拒绝其自动上线。
+    """
+    return _TEMPLATE_ABILITY_TASK.get(template, ("text2img", "pending"))
