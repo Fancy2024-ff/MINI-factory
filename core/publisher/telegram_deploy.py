@@ -225,15 +225,19 @@ def deploy_to_cloudflare(html_content: str) -> str:
 
 
 def build_collection() -> None:
-    """构建合集前端（npm run build）。失败抛 RuntimeError。"""
+    """构建合集前端（npm run build）。把后端公网地址注入 VITE_API_BASE_URL，
+    使生成的功能页连到正确后端（而非默认 localhost）。失败抛 RuntimeError。"""
     import shutil
     import subprocess
-    npx = shutil.which("npm") or "npm"
+    npm = shutil.which("npm") or "npm"
+    env = os.environ.copy()
+    if WEBAPP_BACKEND_URL:
+        env["VITE_API_BASE_URL"] = WEBAPP_BACKEND_URL.rstrip("/")
     result = subprocess.run(
-        [npx, "run", "build"],
+        [npm, "run", "build"],
         cwd=str(WEB_APP_DIR),
         capture_output=True, text=True, timeout=300,
-        encoding="utf-8", errors="replace",
+        encoding="utf-8", errors="replace", env=env,
     )
     if result.returncode != 0:
         raise RuntimeError(f"collection build failed: {result.stderr or result.stdout}")
@@ -365,19 +369,25 @@ def deploy_telegram(job_id: str, output_dir: Path, app_info: dict, opportunity: 
     from core.publisher.feature_registry import (
         build_feature_config, validate_feature, append_feature)
 
-    sel_path = output_dir / "template-selection.json"
-    selection = json.loads(sel_path.read_text(encoding="utf-8")) if sel_path.exists() else {}
-    feature_key = opportunity.get("feature_key") or app_info.get("feature_key") \
-        or app_info.get("name_cn") or job_id
-    feat = build_feature_config(feature_key, app_info, selection)
+    try:
+        sel_path = output_dir / "template-selection.json"
+        selection = json.loads(sel_path.read_text(encoding="utf-8")) if sel_path.exists() else {}
+        feature_key = opportunity.get("feature_key") or app_info.get("feature_key") \
+            or app_info.get("name_cn") or job_id
+        feat = build_feature_config(feature_key, app_info, selection)
+    except Exception as e:
+        return {"status": "failed", "stage": "registry", "error": str(e), "automated": True}
 
     ok, reason = validate_feature(feat)
     if not ok:
         return {"status": "pending", "reason": f"feature 未通过校验，未上线: {reason}",
                 "feature": feat, "automated": True}
 
-    before = count_registry_features()
-    appended = append_feature(GENERATED_REGISTRY, feat)
+    try:
+        before = count_registry_features()
+        appended = append_feature(GENERATED_REGISTRY, feat)
+    except Exception as e:
+        return {"status": "failed", "stage": "registry", "error": str(e), "automated": True}
     if not appended:
         print(f"  [TG Deploy] feature 已存在（id={feat['id']}），跳过 append")
 

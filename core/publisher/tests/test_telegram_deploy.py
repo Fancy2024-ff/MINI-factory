@@ -107,3 +107,25 @@ def test_deploy_pending_when_task_not_whitelisted(tmp_path, monkeypatch):
     assert res["status"] == "pending"
     import json as _j
     assert _j.loads(reg.read_text(encoding="utf-8")) == []  # 未写入
+
+
+def test_build_collection_injects_backend_url(monkeypatch):
+    """build_collection 必须把 WEBAPP_BACKEND_URL 注入 VITE_API_BASE_URL，
+    否则生成的功能页会连默认 localhost、用户手机访问不到。"""
+    import subprocess as _sp
+    import core.publisher.telegram_deploy as td
+    captured = {}
+
+    class _Result:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs.get("env", {})
+        return _Result()
+
+    monkeypatch.setattr(td, "WEBAPP_BACKEND_URL", "https://fancyy.cc/")
+    monkeypatch.setattr(_sp, "run", fake_run)
+    td.build_collection()
+    assert captured["env"].get("VITE_API_BASE_URL") == "https://fancyy.cc"
