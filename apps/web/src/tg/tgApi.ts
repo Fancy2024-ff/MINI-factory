@@ -16,10 +16,16 @@ const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 export const MAX_PROMPT_LEN = 500
 
-// 重试退避：快速起步咬住成功窗口，封顶 5s。
+// 重试退避：起步即拉长，确保 60s 窗口内请求数 < 后端限流上限（10次/60s/IP），
+// 否则快重试会把限流窗口持续打满，导致“永久转圈、永远出不来”的自锁死。
+// 指数退避 3s→12s 封顶：60s 内约 3~4 次请求，稳在限流线以下。
 export function retryDelay(attempt: number): number {
-  return Math.min(600 + attempt * 500, 5000)
+  return Math.min(3000 * Math.pow(1.5, attempt - 1), 12000)
 }
+
+// 兜底上限：对用户表现为“一直转圈直到出图”，但内部设最长时长上限。
+// 到顶仍未出图 → 不弹失败，由调用方温和收尾（保留输入、提示稍后再试）。
+export const MAX_RETRY_MS = 90_000
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
@@ -37,6 +43,45 @@ const FATAL_ERROR_CODES = new Set<string>([
 
 export function isFatalError(code: string | undefined): boolean {
   return !!code && FATAL_ERROR_CODES.has(code)
+}
+
+// 共享出图重试 helper：对用户表现为“转圈直到出图”，绝不展示失败文案。
+// - 成功（拿到可展示图）→ 'ok'
+// - 配置类 fatal 错误（再试无用）→ 'fatal'
+// - 到达兜底上限仍未出图 → 'exhausted'（调用方温和收尾，不弹“失败”）
+// 退避优先用后端 retry_after（限流场景），否则用对齐限流的指数退避，避免自锁死。
+export type RetryOutcome =
+  | { kind: 'ok'; display: DisplayImage }
+  | { kind: 'fatal'; message: string }
+  | { kind: 'exhausted' }
+
+export async function runUntilImage(
+  doRequest: () => Promise<{ ok: boolean; result?: any; error?: import('./types').ApiError }>,
+  toDisplay: (result: any) => DisplayImage | null,
+  shouldContinue: () => boolean,
+  onAttempt?: (attempt: number) => void,
+): Promise<RetryOutcome> {
+  const deadline = Date.now() + MAX_RETRY_MS
+  let attempt = 0
+  while (shouldContinue()) {
+    attempt++
+    if (onAttempt) onAttempt(attempt)
+    const resp = await doRequest()
+    if (resp.ok && resp.result) {
+      const d = toDisplay(resp.result)
+      if (d) return { kind: 'ok', display: d }
+      // ok 但无可展示图（provider 偶发空响应）：视为瞬时失败，继续重试。
+    } else if (isFatalError(resp.error?.code)) {
+      return { kind: 'fatal', message: resp.error?.message || '服务暂时不可用' }
+    }
+    // 限流时优先听后端的 retry_after；否则用对齐限流的指数退避。
+    const retryAfterMs =
+      resp.error?.retry_after != null ? resp.error.retry_after * 1000 : retryDelay(attempt)
+    // 已超兜底上限：不再发起新请求，交调用方温和收尾。
+    if (Date.now() + retryAfterMs >= deadline) return { kind: 'exhausted' }
+    await sleep(retryAfterMs)
+  }
+  return { kind: 'exhausted' }
 }
 
 export async function generateImage(

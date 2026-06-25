@@ -675,6 +675,36 @@ def _limit_items(items, limit: int):
     return items[:limit]
 
 
+def _processed_app_keys() -> set:
+    """已进流水线/已生产的 app canonical_key 集合（用于候选列表 app 级去重）。
+
+    读 processed-apps.json + opportunity-queue.json，委托 core 纯函数计算。
+    读不到文件 / 解析失败 → 空集合（绝不让去重逻辑影响接口可用性）。
+    """
+    from core.opportunity.processed_apps import processed_app_keys
+
+    processed = _read_opportunity_json("processed-apps.json", {"features": {}})
+    queue = _read_opportunity_json("opportunity-queue.json", [])
+    try:
+        return processed_app_keys(
+            processed if isinstance(processed, dict) else {"features": {}},
+            queue if isinstance(queue, list) else [],
+        )
+    except Exception:
+        return set()
+
+
+def _filter_processed_candidates(candidates):
+    """从候选列表剔除已处理的 app（按 canonical_key）。非 list 原样返回。"""
+    if not isinstance(candidates, list):
+        return candidates
+    hidden = _processed_app_keys()
+    if not hidden:
+        return candidates
+    return [c for c in candidates if c.get("canonical_key") not in hidden]
+
+
+
 @app.get("/api/opportunities/summary", dependencies=[Depends(verify_api_key)])
 def get_opportunities_summary(limit: int = Query(default=8, ge=1, le=50)):
     """Read the latest opportunity crawl outputs for the dashboard."""
@@ -682,6 +712,9 @@ def get_opportunities_summary(limit: int = Query(default=8, ge=1, le=50)):
     queue = _read_opportunity_json("opportunity-queue.json", [])
     candidates = _read_opportunity_json("candidate-pool.json", [])
     features = _read_opportunity_json("feature-opportunities.json", [])
+
+    # 候选列表 app 级去重：已进流水线/已生产的 app 不再出现（只读过滤）。
+    candidates = _filter_processed_candidates(candidates)
 
     pending = [q for q in queue if q.get("status") == "pending"]
     produced = [q for q in queue if q.get("status") == "produced"]
@@ -722,6 +755,8 @@ def get_opportunity_queue(limit: int = Query(default=50, ge=1, le=200)):
 @app.get("/api/opportunities/candidates", dependencies=[Depends(verify_api_key)])
 def get_opportunity_candidates(limit: int = Query(default=50, ge=1, le=200)):
     candidates = _read_opportunity_json("candidate-pool.json", [])
+    # app 级去重：已进流水线/已生产的 app 不再出现（只读过滤，文件不变）。
+    candidates = _filter_processed_candidates(candidates)
     return {"items": _limit_items(candidates, limit), "total": len(candidates) if isinstance(candidates, list) else 0}
 
 
@@ -1212,6 +1247,8 @@ _RATE_LIMITED_RESPONSE = {
         "code": "RATE_LIMITED",
         "message": "请求过于频繁，请稍后再试",
         "retryable": True,
+        # 建议客户端等待整窗后再重试，避免快重试把限流窗口持续打满（自锁死）。
+        "retry_after": GENERATION_RATE_WINDOW,
     },
 }
 

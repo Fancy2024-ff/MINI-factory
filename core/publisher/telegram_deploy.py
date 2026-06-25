@@ -101,8 +101,6 @@ def render_template(app_name: str, features: list[str], description: str) -> str
         "{{APP_ICON}}": icon,
         "{{APP_SUBTITLE}}": subtitle,
         "{{INPUT_PLACEHOLDER}}": placeholder,
-        "{{LLM_BASE_URL}}": WEBAPP_LLM_BASE_URL,
-        "{{LLM_API_KEY}}": WEBAPP_LLM_API_KEY,
         "{{LLM_MODEL}}": WEBAPP_LLM_MODEL,
         "{{SYSTEM_PROMPT}}": system_prompt_escaped,
     }
@@ -163,8 +161,12 @@ def get_cloudflare_account_id() -> str:
 
 def deploy_to_cloudflare(html_content: str) -> str:
     """
-    Deploy HTML to Cloudflare Pages using wrangler CLI.
+    Deploy HTML + Pages Functions to Cloudflare Pages using wrangler CLI.
     Returns the production URL.
+
+    部署目录结构：
+        <tmpdir>/index.html              静态页（无任何密钥）
+        <tmpdir>/functions/api/chat.js   LLM 代理（密钥经服务端 secret 读取）
     """
     import shutil
     import subprocess
@@ -175,10 +177,15 @@ def deploy_to_cloudflare(html_content: str) -> str:
     # back to the plain name so non-Windows platforms are unaffected.
     npx = shutil.which("npx") or shutil.which("npx.cmd") or "npx"
 
-    # Write HTML to a temp directory
+    # Write HTML + copy Pages Functions into a temp directory
     with tempfile.TemporaryDirectory() as tmpdir:
         index_path = Path(tmpdir) / "index.html"
         index_path.write_text(html_content, encoding="utf-8")
+
+        # 复制 functions/ 目录（Pages Functions：functions/api/chat.js -> /api/chat）
+        functions_src = TEMPLATE_DIR / "functions"
+        if functions_src.exists():
+            shutil.copytree(functions_src, Path(tmpdir) / "functions")
 
         # Run wrangler deploy
         env = os.environ.copy()
@@ -208,6 +215,35 @@ def deploy_to_cloudflare(html_content: str) -> str:
     print(f"  [Cloudflare] Production: {production_url}")
 
     return production_url
+
+
+def put_cloudflare_secrets() -> None:
+    """把 LLM key / base url 写入 Cloudflare Pages 服务端 secret（非交互，stdin 传值）。
+
+    secret 仅存于 Cloudflare 服务端，供 functions/api/chat.js 读取，不进入下发的 HTML。
+    """
+    import subprocess
+
+    secrets = {
+        "LLM_API_KEY": WEBAPP_LLM_API_KEY,
+        "LLM_BASE_URL": WEBAPP_LLM_BASE_URL,
+    }
+    env = os.environ.copy()
+    env["CLOUDFLARE_API_TOKEN"] = CLOUDFLARE_API_TOKEN
+    if CLOUDFLARE_ACCOUNT_ID:
+        env["CLOUDFLARE_ACCOUNT_ID"] = CLOUDFLARE_ACCOUNT_ID
+
+    for name, value in secrets.items():
+        cmd = ["npx", "wrangler", "pages", "secret", "put", name,
+               "--project-name", CLOUDFLARE_PROJECT_NAME]
+        result = subprocess.run(
+            cmd,
+            input=value + "\n",
+            capture_output=True, text=True, env=env, timeout=60,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"wrangler secret put {name} failed: {result.stderr}")
+        print(f"  [Cloudflare] secret set: {name}")
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +368,22 @@ def deploy_telegram(job_id: str, output_dir: Path, app_info: dict, opportunity: 
             "error": str(e),
             "automated": True,
         }
+
+    # Step 2b: 写入服务端 secret（仅文本 WebApp 需要）。
+    # 文本 App 经 functions/api/chat.js 代理调 LLM，key 存 Cloudflare 服务端 secret，
+    # 不进下发的 HTML。出图 App 调我们自己的后端，无需在此设置 LLM secret。
+    if not is_image:
+        print(f"  [TG Deploy] Setting Cloudflare server-side secrets...")
+        try:
+            put_cloudflare_secrets()
+        except Exception as e:
+            return {
+                "status": "partial",
+                "stage": "cloudflare_secrets",
+                "error": str(e),
+                "webapp_url": webapp_url,
+                "automated": True,
+            }
 
     # Step 3: Configure Telegram Bot
     print(f"  [TG Deploy] Configuring Telegram Bot...")

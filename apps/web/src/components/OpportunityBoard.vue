@@ -24,6 +24,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   start: [mode: PipelineMode]
+  stop: []
   refresh: []
   'open-view': [view: OpportunityView]
   'update-launch-options': [next: PipelineLaunchOptions]
@@ -66,6 +67,7 @@ const regionChoices = [
 
 const platformChoices = [
   { id: 'app_store', label: 'App Store' },
+  { id: 'google_play', label: 'Google Play' },
   { id: 'app_store,google_play', label: 'Dual Source' },
 ]
 
@@ -191,6 +193,9 @@ function openView(view: OpportunityView) {
       <button class="secondary" :disabled="running" @click="emit('start', 'crawl')">只抓取机会</button>
       <button class="secondary" :disabled="running" @click="emit('start', 'queue')">消费队列</button>
       <button class="ghost" @click="emit('refresh')">刷新数据</button>
+    </div>
+    <div class="hero-stop">
+      <button class="stop-btn" :disabled="!running" @click="emit('stop')">STOP</button>
     </div>
   </section>
 
@@ -493,6 +498,38 @@ h1 {
   justify-content: center;
   gap: 12px;
   margin-top: 34px;
+}
+
+.hero-stop {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.stop-btn {
+  border-radius: 999px;
+  padding: 12px 32px;
+  background: #ff3b30;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  border: none;
+  cursor: pointer;
+  transition: background 0.18s, transform 0.18s var(--ease-apple);
+}
+
+.stop-btn:hover:not(:disabled) {
+  background: #e0241b;
+  transform: translateY(-1px);
+}
+
+.stop-btn:disabled {
+  background: #f0d2d0;
+  color: #fff;
+  cursor: not-allowed;
 }
 
 .primary,

@@ -47,20 +47,16 @@
       <div v-if="toast" class="toast">{{ toast }}</div>
     </section>
 
-    <!-- 30s 广告倒计时 -->
-    <div v-if="adVisible" class="ad-overlay">
-      <div class="ad-box">📺</div>
-      <div class="ad-countdown">{{ adRemain > 0 ? ('广告 ' + adRemain + 's') : '广告结束 ✓' }}</div>
-      <div class="ad-hint">观看广告后即可下载高清图片</div>
-      <button class="ad-skip" :disabled="adRemain > 0" @click="finishAd">领取并下载</button>
-    </div>
+    <AdGateOverlay :visible="adVisible" :remain="adRemain" @claim="claim" />
   </div>
 </template>
 <!-- SCRIPT_PLACEHOLDER -->
 <script setup lang="ts">
 import { ref } from 'vue'
-import { editImage, toDisplayImage, retryDelay, sleep, isFatalError } from './tgApi'
+import { editImage, toDisplayImage, runUntilImage } from './tgApi'
 import { haptic } from './telegram'
+import { useDownloadGate, downloadImage } from './download'
+import AdGateOverlay from './AdGateOverlay.vue'
 import type { DisplayImage } from './types'
 
 const emit = defineEmits<{ (e: 'navigate', path: string): void }>()
@@ -101,60 +97,37 @@ async function onRemove() {
   errorMsg.value = ''
   haptic('light')
   // 抠图偶发失败：后台静默重试直到成功，只转圈，不展示失败文案。
-  let attempt = 0
-  while (phase.value === 'loading') {
-    attempt++
-    loadingText.value = LOADING_MSGS[Math.min(attempt - 1, LOADING_MSGS.length - 1)]
-    const resp = await editImage(sourceFile.value, { task: 'background_remove' })
-    if (resp.ok && resp.result) {
-      const d = toDisplayImage(resp.result)
-      if (d) { display.value = d; phase.value = 'result'; haptic('medium'); return }
-      await sleep(retryDelay(attempt)); continue
-    }
-    if (isFatalError(resp.error?.code)) {
-      errorMsg.value = resp.error?.message || '服务暂时不可用'; phase.value = 'error'; return
-    }
-    await sleep(retryDelay(attempt))
+  // 退避对齐后端限流并设兜底上限（见 tgApi.runUntilImage），避免永久转圈/自锁死。
+  const outcome = await runUntilImage(
+    () => editImage(sourceFile.value as Blob, { task: 'background_remove' }),
+    (result) => toDisplayImage(result),
+    () => phase.value === 'loading',
+    (attempt) => { loadingText.value = LOADING_MSGS[Math.min(attempt - 1, LOADING_MSGS.length - 1)] },
+  )
+  if (phase.value !== 'loading') return
+  if (outcome.kind === 'ok') {
+    display.value = outcome.display; phase.value = 'result'; haptic('medium'); return
   }
+  if (outcome.kind === 'fatal') {
+    errorMsg.value = outcome.message; phase.value = 'error'; return
+  }
+  // exhausted：到达兜底上限仍未出图。不弹失败，温和收尾回到表单。
+  phase.value = 'form'
+  showToast('当前处理人数较多，请稍后再试一次')
 }
 
 function backToForm() { phase.value = 'form'; display.value = null }
 function goHome() { emit('navigate', '/tg') }
 
-// 下载前 30s 广告倒计时
-const adVisible = ref(false)
-const adRemain = ref(0)
-let downloadUnlocked = false
-let adTimer: ReturnType<typeof setInterval> | null = null
+// 下载前看广告解锁，解锁后同会话内复用。
+const { adVisible, adRemain, requestDownload, claim } = useDownloadGate()
 
 function handleDownload() {
   if (!display.value) { showToast('还没有可下载的图片'); return }
-  if (downloadUnlocked) { doDownload(); return }
-  adVisible.value = true
-  adRemain.value = 30
-  if (adTimer) clearInterval(adTimer)
-  adTimer = setInterval(() => {
-    adRemain.value--
-    if (adRemain.value <= 0) { if (adTimer) clearInterval(adTimer); downloadUnlocked = true }
-  }, 1000)
-}
-
-function finishAd() {
-  if (adRemain.value > 0) return
-  adVisible.value = false
-  doDownload()
-}
-
-function doDownload() {
-  try {
-    const a = document.createElement('a')
-    a.href = display.value!.src
-    a.download = 'bg-removed-' + Date.now() + '.png'
-    document.body.appendChild(a); a.click(); document.body.removeChild(a)
-    showToast('已开始下载 ✓')
-  } catch {
-    showToast('下载失败，请长按图片保存')
-  }
+  requestDownload(() => {
+    const ok = downloadImage(display.value!.src, 'bg-removed-' + Date.now() + '.png')
+    showToast(ok ? '已开始下载 ✓' : '下载失败，请长按图片保存')
+  })
 }
 
 // 供测试驱动（jsdom 无真实 file input）。
@@ -191,10 +164,4 @@ defineExpose({ sourceFile, sourcePreview, onRemove, phase })
 .act { padding: 14px; border-radius: 12px; border: 1.5px solid #e3e3e8; background: var(--tg-card, #fff); font-size: 15px; color: var(--tg-text, #333); cursor: pointer; }
 .act.primary { background: var(--tg-btn, #ff6b35); color: var(--tg-btn-text, #fff); border: none; font-weight: 700; }
 .toast { position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.82); color: #fff; padding: 10px 20px; border-radius: 999px; font-size: 14px; z-index: 20; }
-.ad-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.92); z-index: 200; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #fff; padding: 24px; }
-.ad-box { width: 100%; max-width: 420px; aspect-ratio: 16/10; background: linear-gradient(135deg,#1f2937,#374151); border-radius: 16px; display: flex; align-items: center; justify-content: center; font-size: 40px; margin-bottom: 20px; }
-.ad-countdown { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
-.ad-hint { font-size: 13px; color: #9ca3af; }
-.ad-skip { margin-top: 18px; border: 1px solid #4b5563; color: #d1d5db; background: none; padding: 8px 18px; border-radius: 20px; }
-.ad-skip:disabled { opacity: 0.4; }
 </style>

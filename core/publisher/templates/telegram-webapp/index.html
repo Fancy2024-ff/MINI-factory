@@ -106,9 +106,10 @@
       }
     }
 
+    // API key 不在此处——请求经同域 /api/chat 由服务端代理转发，
+    // key 仅存于 Cloudflare 服务端环境变量，不下发给客户端。
     var CONFIG = {
-      apiBase: '{{LLM_BASE_URL}}',
-      apiKey: '{{LLM_API_KEY}}',
+      apiBase: '/api',
       model: '{{LLM_MODEL}}',
       systemPrompt: '{{SYSTEM_PROMPT}}'
     };
@@ -127,9 +128,9 @@
       btn.disabled = true;
       btn.innerHTML = '处理中<span class="loading-dots"></span>';
       try {
-        var res = await fetch(CONFIG.apiBase + '/chat/completions', {
+        var res = await fetch(CONFIG.apiBase + '/chat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + CONFIG.apiKey },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model: CONFIG.model,
             max_tokens: 1024,

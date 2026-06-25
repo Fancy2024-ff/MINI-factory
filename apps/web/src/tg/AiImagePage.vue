@@ -66,7 +66,8 @@
       </div>
 
       <div class="result-actions">
-        <button class="act primary" @click="regenerate">🔄 再生成</button>
+        <button class="act primary" @click="handleDownload">⬇ 下载高清图</button>
+        <button class="act" @click="regenerate">🔄 再生成</button>
         <button class="act" @click="regenerateSame">✨ 生成同款</button>
         <button class="act" @click="copyPrompt">📋 复制描述</button>
         <button class="act" @click="share">📤 {{ shareLabel }}</button>
@@ -75,13 +76,17 @@
       <button class="back-form" @click="backToForm">← 修改描述</button>
       <div v-if="toast" class="toast">{{ toast }}</div>
     </section>
+
+    <AdGateOverlay :visible="adVisible" :remain="adRemain" @claim="claim" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { generateImage, toDisplayImage, MAX_PROMPT_LEN, retryDelay, sleep, isFatalError } from './tgApi'
+import { generateImage, toDisplayImage, MAX_PROMPT_LEN, runUntilImage } from './tgApi'
 import { haptic, shareInTelegram, isInTelegram } from './telegram'
+import { useDownloadGate, downloadImage } from './download'
+import AdGateOverlay from './AdGateOverlay.vue'
 import type { AspectRatio, DisplayImage } from './types'
 
 const emit = defineEmits<{ (e: 'navigate', path: string): void }>()
@@ -126,34 +131,29 @@ async function onGenerate() {
   haptic('light')
 
   // 出图 provider 偶发失败：后台静默重试直到成功，用户只看到“生成中”转圈，
-  // 绝不展示任何失败文案。仅配置类错误（retryable === false）才停止并提示。
-  let attempt = 0
-  while (phase.value === 'loading') {
-    attempt++
-    loadingText.value = LOADING_MSGS[Math.min(attempt - 1, LOADING_MSGS.length - 1)]
-    const resp = await generateImage({
+  // 绝不展示任何失败文案。退避对齐后端限流并设兜底上限（见 tgApi.runUntilImage），
+  // 避免快重试打满限流导致永久转圈/自锁死。
+  const outcome = await runUntilImage(
+    () => generateImage({
       template_id: 'ai-image',
       prompt: p,
       style: style.value,
       aspect_ratio: aspectRatio.value,
-    })
-    if (resp.ok && resp.result) {
-      const d = toDisplayImage(resp.result)
-      if (d) { display.value = d; phase.value = 'result'; haptic('medium'); return }
-      // 结果缺图：当作可重试的瞬时失败，继续后台重试，不打扰用户。
-      await sleep(retryDelay(attempt))
-      continue
-    }
-    // 配置类错误无法靠重试解决：停止并给中性提示。
-    if (isFatalError(resp.error?.code)) {
-      errorMsg.value = resp.error?.message || '服务暂时不可用'
-      retryable.value = false
-      phase.value = 'error'
-      return
-    }
-    // 其余（provider 抽风/空图/超时/网络/限流）：静默退避后重试，保持转圈。
-    await sleep(retryDelay(attempt))
+    }),
+    (result) => toDisplayImage(result),
+    () => phase.value === 'loading',
+    (attempt) => { loadingText.value = LOADING_MSGS[Math.min(attempt - 1, LOADING_MSGS.length - 1)] },
+  )
+  if (phase.value !== 'loading') return
+  if (outcome.kind === 'ok') {
+    display.value = outcome.display; phase.value = 'result'; haptic('medium'); return
   }
+  if (outcome.kind === 'fatal') {
+    errorMsg.value = outcome.message; retryable.value = false; phase.value = 'error'; return
+  }
+  // exhausted：到达兜底上限仍未出图。不弹失败，温和收尾回到表单。
+  phase.value = 'form'
+  showToast('当前生成人数较多，已为你保留描述，请稍后再试一次')
 }
 
 function regenerate() { phase.value = 'form'; display.value = null }
@@ -174,6 +174,16 @@ function share() {
   const text = display.value?.prompt || prompt.value
   const shared = shareInTelegram(`我用 MiniForge 生成了「${text}」，你也来试试！`)
   showToast(shared ? '已唤起分享' : '可截图分享给好友')
+}
+
+// 下载前看广告解锁，解锁后同会话内复用。
+const { adVisible, adRemain, requestDownload, claim } = useDownloadGate()
+function handleDownload() {
+  if (!display.value) { showToast('还没有可下载的图片'); return }
+  requestDownload(() => {
+    const ok = downloadImage(display.value!.src, 'ai-image-' + Date.now() + '.png')
+    showToast(ok ? '已开始下载 ✓' : '下载失败，请长按图片保存')
+  })
 }
 
 function goHome() { emit('navigate', '/tg') }

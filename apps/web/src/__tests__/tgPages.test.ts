@@ -418,3 +418,65 @@ describe('BgRemovePage', () => {
     vi.useRealTimers()
   })
 })
+
+describe('下载 + 看广告解锁（出图页共用）', () => {
+  // 渲染出结果态：先 mock 成功生成，再点生成。
+  async function mountWithResult(Page: any, fillForm: (w: any) => Promise<void>) {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: { preview_type: 'image', image_base64: 'QUJD', prompt: 'x', title: 't' },
+      }),
+    } as any))
+    const w = mount(Page)
+    await fillForm(w)
+    await w.find('.generate-btn').trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    await nextTick()
+    return w
+  }
+
+  it('AiImagePage 结果态有下载按钮，点击弹出看广告遮罩', async () => {
+    const w = await mountWithResult(AiImagePage, async (w) => {
+      await w.find('.prompt-input').setValue('一只猫')
+    })
+    expect(w.find('.result-img').exists()).toBe(true)
+    const dl = w.findAll('.act').find((b: any) => b.text().includes('下载'))
+    expect(dl).toBeTruthy()
+    expect(w.find('.ad-overlay').exists()).toBe(false)
+    await dl!.trigger('click')
+    await nextTick()
+    // 看广告遮罩出现，倒计时未结束时「领取」禁用
+    expect(w.find('.ad-overlay').exists()).toBe(true)
+    expect(w.find('.ad-skip').attributes('disabled')).toBeDefined()
+  })
+
+  it('看完广告后点「领取并下载」触发下载并关闭遮罩', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, result: { preview_type: 'image', image_base64: 'QUJD', prompt: 'x', title: 't' } }),
+    } as any))
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    const w = mount(AiImagePage)
+    await w.find('.prompt-input').setValue('一只猫')
+    await w.find('.generate-btn').trigger('click')
+    await vi.advanceTimersByTimeAsync(0)
+    await nextTick()
+
+    const dl = w.findAll('.act').find((b: any) => b.text().includes('下载'))!
+    await dl.trigger('click')
+    await nextTick()
+    // 推进 30s 广告倒计时
+    await vi.advanceTimersByTimeAsync(30000)
+    await nextTick()
+    expect(w.find('.ad-skip').attributes('disabled')).toBeUndefined()
+    await w.find('.ad-skip').trigger('click')
+    await nextTick()
+    expect(w.find('.ad-overlay').exists()).toBe(false)
+    expect(clickSpy).toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+})

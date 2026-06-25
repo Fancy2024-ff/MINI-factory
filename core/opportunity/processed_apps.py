@@ -38,6 +38,31 @@ def is_processed(data: dict, feature_key: str) -> bool:
     return bool(rec) and rec.get("status") == "produced"
 
 
+def processed_app_keys(processed: dict, queue: list[dict]) -> set[str]:
+    """返回「已进流水线且不可重做」的 app canonical_key 集合。
+
+    用于 API 在返回候选列表时做 app 级差集过滤（已处理的整个 app 不再出现）。
+    计入两类来源：
+      - processed-apps.json 中 status == produced 记录的 parent_app_key（已生产成功）
+      - opportunity-queue.json 中 status in {queued, produced} 的 parent_app_key（在流水线中/已产出）
+    failed / skipped / pending 一律不计入——失败的 app 要能重新出现以便重试。
+    空字符串 / 缺失字段安全跳过，绝不产出空 key。
+    """
+    keys: set[str] = set()
+    for rec in (processed or {}).get("features", {}).values():
+        if isinstance(rec, dict) and rec.get("status") == "produced":
+            key = rec.get("parent_app_key")
+            if key:
+                keys.add(key)
+    for item in queue or []:
+        if isinstance(item, dict) and item.get("status") in ("queued", "produced"):
+            key = item.get("parent_app_key")
+            if key:
+                keys.add(key)
+    return keys
+
+
+
 def retry_count(data: dict, feature_key: str) -> int:
     rec = data.get("features", {}).get(feature_key)
     return int(rec.get("retry_count", 0)) if rec else 0

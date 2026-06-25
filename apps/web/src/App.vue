@@ -33,6 +33,7 @@ const opportunityFeatures = ref<any[]>([])
 const opportunityView = ref<OpportunityView>('queue')
 const menuOpen = ref(false)
 const running = ref(false)
+const currentTaskId = ref('')
 const logs = ref<string[]>([])
 const activeTab = ref('overview')
 const error = ref('')
@@ -238,6 +239,7 @@ function teardownWatchers() {
 
 function finishRun(jobId?: string) {
   running.value = false
+  currentTaskId.value = ''
   wsStatus.value = ''
   teardownWatchers()
   if (jobId) {
@@ -290,6 +292,7 @@ async function startPipeline(nextMode?: PipelineMode) {
       running.value = false
       return
     }
+    currentTaskId.value = res.task_id || ''
 
     if (res.job_id) {
       startStatusPolling(res.job_id)
@@ -362,6 +365,24 @@ function handleSelectStep(stepId: string) {
   selectedStepId.value = stepId
 }
 
+async function stopPipeline() {
+  try {
+    if (currentTaskId.value) {
+      // async 主路径：取消 worker 正在执行的 task
+      await api.cancelTask(currentTaskId.value)
+    } else {
+      // sync 兼容路径：终止 API 进程内的子进程
+      await api.stopPipeline()
+    }
+    wsStatus.value = '已请求停止流水线…'
+  } catch (e: any) {
+    error.value = `停止失败: ${e.message}`
+  } finally {
+    currentTaskId.value = ''
+    finishRun()
+  }
+}
+
 onMounted(async () => {
   await loadJobs()
   await loadLatest()
@@ -419,6 +440,7 @@ onBeforeUnmount(() => {
           :mode="mode"
           :launch-options="launchOptions"
           @start="startPipeline"
+          @stop="stopPipeline"
           @refresh="refreshOpportunityData"
           @open-view="setOpportunityView"
           @update-launch-options="updateLaunchOptions"

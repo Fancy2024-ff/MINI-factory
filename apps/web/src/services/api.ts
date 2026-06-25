@@ -50,6 +50,8 @@ export interface PipelineStartResult {
   accepted: boolean
   job_id: string
   mode: string
+  task_id?: string
+  execution_mode?: string
 }
 
 export interface PipelineStartOptions {

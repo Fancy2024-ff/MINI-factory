@@ -71,6 +71,9 @@ export interface ApiError {
   code: string
   message: string
   retryable?: boolean
+  // 后端限流时给出的建议等待秒数；前端遇到 RATE_LIMITED 优先按它退避，
+  // 避免固定快重试把限流窗口持续打满（自锁死）。
+  retry_after?: number
 }
 
 export interface GenerateImageResponse {

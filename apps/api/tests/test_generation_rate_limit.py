@@ -42,6 +42,8 @@ def test_image_endpoint_rate_limited_after_threshold(server_client, monkeypatch)
     assert body["ok"] is False
     assert body["error"]["code"] == "RATE_LIMITED"
     assert body["error"]["retryable"] is True
+    # 携带建议等待秒数，供前端按窗口退避，避免快重试持续打满限流（自锁死）。
+    assert body["error"]["retry_after"] == api.GENERATION_RATE_WINDOW
     # 不暴露内部细节
     assert "deque" not in body["error"]["message"]
     assert "ip" not in body["error"]["message"].lower()

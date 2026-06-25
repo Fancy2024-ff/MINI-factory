@@ -55,7 +55,8 @@
       </div>
       <div class="unlock-tip">分享到朋友圈解锁高清 / 去水印（视频版上线后开放）</div>
       <div class="result-actions">
-        <button class="act primary" @click="regenerate">🔄 再生成</button>
+        <button class="act primary" @click="handleDownload">⬇ 下载预览图</button>
+        <button class="act" @click="regenerate">🔄 再生成</button>
         <button class="act" @click="regenerateSame">✨ 生成同款</button>
         <button class="act" @click="copyPrompt">📋 复制台词</button>
         <button class="act" @click="goHome">🏠 返回首页</button>
@@ -63,13 +64,17 @@
       <button class="back-form" @click="backToForm">← 修改台词</button>
       <div v-if="toast" class="toast">{{ toast }}</div>
     </section>
+
+    <AdGateOverlay :visible="adVisible" :remain="adRemain" @claim="claim" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { generateTemplate, templateResultToDisplay, MAX_PROMPT_LEN, retryDelay, sleep, isFatalError } from './tgApi'
+import { generateTemplate, templateResultToDisplay, MAX_PROMPT_LEN, runUntilImage } from './tgApi'
 import { haptic } from './telegram'
+import { useDownloadGate, downloadImage } from './download'
+import AdGateOverlay from './AdGateOverlay.vue'
 import type { DisplayImage } from './types'
 
 const emit = defineEmits<{ (e: 'navigate', path: string): void }>()
@@ -100,23 +105,24 @@ async function onGenerate() {
   errorMsg.value = ''
   haptic('light')
   // 出图偶发失败：后台静默重试直到成功，用户只看到转圈，不展示失败文案。
-  let attempt = 0
-  while (phase.value === 'loading') {
-    attempt++
-    const resp = await generateTemplate({
+  // 退避对齐后端限流并设兜底上限（见 tgApi.runUntilImage），避免永久转圈/自锁死。
+  const outcome = await runUntilImage(
+    () => generateTemplate({
       template_id: 'pet-talk-viral',
       input: { prompt: p },
-    })
-    if (resp.ok && resp.result) {
-      const d = templateResultToDisplay(resp.result, '宠物说话预览')
-      if (d) { display.value = d; phase.value = 'result'; haptic('medium'); return }
-      await sleep(retryDelay(attempt)); continue
-    }
-    if (isFatalError(resp.error?.code)) {
-      errorMsg.value = resp.error?.message || '服务暂时不可用'; retryable.value = false; phase.value = 'error'; return
-    }
-    await sleep(retryDelay(attempt))
+    }),
+    (result) => templateResultToDisplay(result, '宠物说话预览'),
+    () => phase.value === 'loading',
+  )
+  if (phase.value !== 'loading') return
+  if (outcome.kind === 'ok') {
+    display.value = outcome.display; phase.value = 'result'; haptic('medium'); return
   }
+  if (outcome.kind === 'fatal') {
+    errorMsg.value = outcome.message; retryable.value = false; phase.value = 'error'; return
+  }
+  phase.value = 'form'
+  showToast('当前生成人数较多，已为你保留台词，请稍后再试一次')
 }
 
 function regenerate() { phase.value = 'form'; display.value = null }
@@ -134,6 +140,16 @@ async function copyPrompt() {
 }
 
 function goHome() { emit('navigate', '/tg') }
+
+// 下载前看广告解锁，解锁后同会话内复用。
+const { adVisible, adRemain, requestDownload, claim } = useDownloadGate()
+function handleDownload() {
+  if (!display.value) { showToast('还没有可下载的图片'); return }
+  requestDownload(() => {
+    const ok = downloadImage(display.value!.src, 'pet-talk-' + Date.now() + '.png')
+    showToast(ok ? '已开始下载 ✓' : '下载失败，请长按图片保存')
+  })
+}
 </script>
 
 <style scoped>
