@@ -311,3 +311,49 @@ def test_maintenance_lock_concurrent_single_winner(tmp_path):
         t.join()
     # 并发 8 个 worker 同一时刻抢，恰好一个成功
     assert results.count(True) == 1
+
+
+# --- A3: 多 worker 并发安全 + queue_id 去重 ---
+
+def test_concurrent_claim_no_duplicate(tmp_path):
+    """多线程并发 claim：每个 task 恰好被一个 worker 领到，无重复。"""
+    import threading
+    store = TaskStore(tmp_path / "tasks.sqlite3", lock_seconds=600)
+    n_tasks = 20
+    for _ in range(n_tasks):
+        store.enqueue_task(TaskKind.PIPELINE_RUN, payload={"mode": "queue"})
+
+    claimed: list[str] = []
+    lock = threading.Lock()
+
+    def grab():
+        while True:
+            t = store.claim_next_task(f"w-{threading.get_ident()}")
+            if t is None:
+                return
+            with lock:
+                claimed.append(t["id"])
+
+    threads = [threading.Thread(target=grab) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # 每个任务恰好被领一次：无重复、无遗漏
+    assert len(claimed) == n_tasks
+    assert len(set(claimed)) == n_tasks
+
+
+def test_find_active_by_queue_id_dedupes(store):
+    """同 queue_id 已有 active(pending) task 时命中，用于去重；完成后不再 active。"""
+    tid = store.enqueue_task(TaskKind.PIPELINE_RUN, payload={"mode": "queue"},
+                             queue_id="q-dup-1")
+    active = store.find_active_by_queue_id("q-dup-1")
+    assert active is not None and active["id"] == tid
+    # 领取后变 running 仍算 active
+    store.claim_next_task("w1")
+    assert store.find_active_by_queue_id("q-dup-1")["id"] == tid
+    # 完成后不再 active
+    store.complete_task(tid, result={})
+    assert store.find_active_by_queue_id("q-dup-1") is None

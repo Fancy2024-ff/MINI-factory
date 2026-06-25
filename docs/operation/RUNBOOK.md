@@ -135,6 +135,24 @@ worker 执行任务期间会开后台心跳线程续租锁（间隔 `lock_second
 长任务不会被 `requeue-stale` 误回收；取消正在运行的任务时，worker 会感知并
 terminate 子进程，不会把它误标成功。
 
+worker 还会在**启动时与运行中周期性**自动回收 stale 锁（默认每 60s），无需额外 cron。
+多 worker 下经 `queue_maintenance` 维护锁互斥，同一轮回收只由一个 worker 执行。
+
+### 多 worker 并发（建议 2，可配置到 4）
+
+SQLite + WAL 下，`claim_next_task` 用 `BEGIN IMMEDIATE` 写事务串行化，多个 worker
+不会领到同一个任务。pipeline 任务大头是 npm build（CPU/IO），claim 写事务仅毫秒级，
+因此 2~4 个 worker 几乎不撞写锁，吞吐近线性提升。再多收益递减，不建议超过 4。
+
+每个 worker 用不同 worker-id（默认 host-pid 已天然区分）：
+
+```bash
+python -m core.pipeline.task_worker --worker-id worker-1
+python -m core.pipeline.task_worker --worker-id worker-2
+```
+
+stale 回收由 worker 内部维护锁互斥，多 worker 不会重复回收。常驻部署见 `deploy/README.md`。
+
 ### 定向 queue 消费
 
 `core/pipeline/runner.py --mode queue` 有两种消费：
