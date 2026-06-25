@@ -319,3 +319,51 @@ def test_worker_does_not_override_produced_item(tmp_path, monkeypatch):
     tw._sync_queue_item("Q-P", "failed", error="boom")
     queue = oq.load_queue(qpath)
     assert oq.find_item(queue, "Q-P")["status"] == "produced"
+
+
+# --- A2: worker 内 stale 自动回收 ---
+
+def test_stale_recovery_runs_on_startup(store, monkeypatch):
+    """worker.run() 启动时先跑一次 stale 回收（即使无任务可领）。"""
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        store, "requeue_stale_tasks_detailed",
+        lambda *a, **k: calls.__setitem__("n", calls["n"] + 1) or {"requeued": 0, "failed": 0},
+    )
+    worker = TaskWorker(store=store, worker_id="w-test", maintenance_interval=60)
+    worker.run(once=True)  # once：领不到任务也会先跑启动回收
+    assert calls["n"] >= 1
+
+
+def test_maintenance_skipped_when_lock_not_acquired(store, monkeypatch):
+    """维护锁未抢到时不调用 requeue（多 worker 防重复）。"""
+    monkeypatch.setattr(store, "try_acquire_maintenance", lambda *a, **k: False)
+    called = {"n": 0}
+    monkeypatch.setattr(
+        store, "requeue_stale_tasks_detailed",
+        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or {"requeued": 0, "failed": 0},
+    )
+    worker = TaskWorker(store=store, worker_id="w-test", maintenance_interval=60)
+    worker._run_maintenance(force=False)
+    assert called["n"] == 0
+
+
+def test_maintenance_runs_when_lock_acquired(store, monkeypatch):
+    monkeypatch.setattr(store, "try_acquire_maintenance", lambda *a, **k: True)
+    called = {"n": 0}
+    monkeypatch.setattr(
+        store, "requeue_stale_tasks_detailed",
+        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or {"requeued": 1, "failed": 0},
+    )
+    worker = TaskWorker(store=store, worker_id="w-test", maintenance_interval=60)
+    worker._run_maintenance(force=False)
+    assert called["n"] == 1
+
+
+def test_maintenance_exception_does_not_break_worker(store, monkeypatch):
+    """维护逻辑抛异常不应让 worker 崩溃。"""
+    def boom(*a, **k):
+        raise RuntimeError("db hiccup")
+    monkeypatch.setattr(store, "try_acquire_maintenance", boom)
+    worker = TaskWorker(store=store, worker_id="w-test", maintenance_interval=60)
+    worker._run_maintenance(force=False)  # 不抛

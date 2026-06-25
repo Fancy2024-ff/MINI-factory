@@ -48,6 +48,11 @@ HEARTBEAT_MAX_SECONDS = 60
 # 子进程运行时轮询 cancel 的间隔（秒）。
 SUBPROCESS_POLL_SECONDS = 1.0
 
+# 维护（stale 回收）周期默认间隔（秒）。worker 主循环按此节流，多 worker 经维护锁互斥。
+DEFAULT_MAINTENANCE_INTERVAL = 60
+# 维护锁名（queue_maintenance.name）。
+MAINTENANCE_STALE_RECOVERY = "stale_recovery"
+
 
 class TaskCancelled(Exception):
     """任务在执行期间被取消（或锁被回收/丢失），executor 应尽快中止。"""
@@ -312,15 +317,38 @@ class TaskWorker:
         store: TaskStore | None = None,
         worker_id: str | None = None,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
+        maintenance_interval: float = DEFAULT_MAINTENANCE_INTERVAL,
     ):
         self.store = store or get_default_store()
         self.worker_id = worker_id or _default_worker_id()
         self.poll_interval = poll_interval
+        self.maintenance_interval = maintenance_interval
         self._stop = False
 
     def request_stop(self, *_args) -> None:
         """请求优雅停止：当前任务跑完后退出循环（不强杀正在跑的任务）。"""
         self._stop = True
+
+    def _run_maintenance(self, force: bool = False) -> None:
+        """周期维护：经维护锁抢占后回收 stale 锁。
+
+        force=True 用于 worker 启动时立即跑一次（仍走维护锁，避免多 worker 同时启动重复跑）。
+        整体 try/except：维护失败绝不拖垮消费循环。
+        """
+        try:
+            # force（启动）时 interval=0：首个 worker 立即抢到；之后 interval 内不再重复。
+            interval = 0 if force else self.maintenance_interval
+            if not self.store.try_acquire_maintenance(
+                MAINTENANCE_STALE_RECOVERY, int(interval), self.worker_id
+            ):
+                return
+            stats = self.store.requeue_stale_tasks_detailed()
+            if stats.get("requeued") or stats.get("failed"):
+                print(f"[worker {self.worker_id}] maintenance: requeued "
+                      f"{stats.get('requeued', 0)}, failed {stats.get('failed', 0)}",
+                      flush=True)
+        except Exception as e:  # noqa: BLE001 — 维护失败不影响消费
+            print(f"[worker {self.worker_id}] maintenance error: {e}", flush=True)
 
     def process_one(self) -> dict | None:
         """claim 并执行一个任务。返回执行后的任务 dict；无可领取任务返回 None。"""
@@ -399,13 +427,21 @@ class TaskWorker:
     def run(self, once: bool = False, max_tasks: int | None = None) -> int:
         """worker 主循环。
 
-        - once=True：尝试领取一个任务就返回（无任务也返回，不阻塞）。
+        - 启动时先跑一次 stale 回收（经维护锁，多 worker 不重复）。
+        - 主循环每 maintenance_interval 秒经维护锁尝试一次回收。
+        - once=True：跑一次启动回收 + 尝试领取一个任务就返回（无任务也返回，不阻塞）。
         - max_tasks=N：最多处理 N 个任务后停止。
         - 否则持续轮询，直到收到 stop（SIGINT/SIGTERM）。
         返回已处理（claim 成功）的任务数。
         """
+        self._run_maintenance(force=True)  # 启动即回收 stale（被维护锁限流）
+        last_maintenance = time.monotonic()
         processed = 0
         while not self._stop:
+            # 周期维护：到点经维护锁尝试回收。
+            if time.monotonic() - last_maintenance >= self.maintenance_interval:
+                self._run_maintenance(force=False)
+                last_maintenance = time.monotonic()
             task = self.process_one()
             if task is not None:
                 processed += 1
