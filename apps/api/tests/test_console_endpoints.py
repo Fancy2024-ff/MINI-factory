@@ -177,3 +177,40 @@ def test_download_returns_zip(server_client, auth_headers):
     res = client.get("/api/jobs/dl-job/download", headers=auth_headers)
     assert res.status_code == 200
     assert res.headers["content-type"] == "application/zip"
+
+
+def test_download_miniapp_target_zips_source_tree(server_client, auth_headers):
+    client, server = server_client
+    d = _make_job(server, "dl-mini")
+    miniapp = d / "generated" / "miniapp"
+    miniapp.mkdir(parents=True, exist_ok=True)
+    (miniapp / "app.json").write_text("{}", encoding="utf-8")
+    res = client.get("/api/jobs/dl-mini/download?target=miniapp", headers=auth_headers)
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "application/zip"
+    assert "miniapp-source" in res.headers.get("content-disposition", "")
+
+
+def test_download_dist_target_zips_build_output(server_client, auth_headers):
+    client, server = server_client
+    d = _make_job(server, "dl-dist")
+    dist = d / "generated" / "miniapp" / "dist"
+    dist.mkdir(parents=True, exist_ok=True)
+    (dist / "bundle.js").write_text("console.log(1)", encoding="utf-8")
+    res = client.get("/api/jobs/dl-dist/download?target=dist", headers=auth_headers)
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "application/zip"
+
+
+def test_download_invalid_target_400(server_client, auth_headers):
+    client, server = server_client
+    _make_job(server, "dl-bad")
+    res = client.get("/api/jobs/dl-bad/download?target=../etc", headers=auth_headers)
+    assert res.status_code == 400
+
+
+def test_download_missing_target_content_404(server_client, auth_headers):
+    client, server = server_client
+    _make_job(server, "dl-empty")  # 没有 generated/miniapp
+    res = client.get("/api/jobs/dl-empty/download?target=miniapp", headers=auth_headers)
+    assert res.status_code == 404

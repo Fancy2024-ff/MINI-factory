@@ -31,6 +31,10 @@ PLATFORMS_DIR = DATA_DIR / "platforms"
 PLATFORM_AUTH_DIR = DATA_DIR / "platform-auth"
 REAL_INPUTS_DIR = DATA_DIR / "inputs" / "real"
 OPPORTUNITY_DIR = DATA_DIR / "opportunity"
+# 广告闸门配置（提交中心读写、TG 站运行时读）；功能 registry（已上架功能页）。
+AD_CONFIG_PATH = PLATFORM_AUTH_DIR / "ad-config.json"
+TELEGRAM_AUTH_PATH = PLATFORM_AUTH_DIR / "telegram.json"
+FEATURES_REGISTRY_PATH = PROJECT_ROOT / "apps" / "web" / "src" / "tg" / "registry" / "features.generated.json"
 
 
 def _real_inputs_file() -> Path:
@@ -45,6 +49,9 @@ DASHBOARD_API_KEY = os.environ.get("DASHBOARD_API_KEY", "")
 DASHBOARD_ORIGIN = os.environ.get("DASHBOARD_ORIGIN", "http://localhost:5173")
 API_HOST = os.environ.get("API_HOST", "127.0.0.1")
 API_PORT = int(os.environ.get("API_PORT", "8000"))
+# Telegram bot token：send-to-chat 接口用它校验 WebApp initData 并调 Bot API
+# sendPhoto。只在服务端，不下发前端。
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 # In production a real API key is mandatory — refuse to start without one.
 if APP_ENV == "production" and not DASHBOARD_API_KEY:
@@ -218,12 +225,32 @@ class TemplateGenerationRequest(BaseModel):
     input: dict = Field(default_factory=dict)
 
 
+class SendToChatRequest(BaseModel):
+    """把生成图发到用户 Telegram 聊天（send-to-chat）。
+
+    init_data 是 Telegram WebApp 下发的已签名串，后端用 bot token 校验后取 chat_id，
+    防止伪造请求把图发给任意用户。image_src 为图片 data URI 或 http(s) URL。
+    """
+
+    init_data: str = ""
+    image_src: str = ""
+    caption: str = ""
+
+
 class QueueActionRequest(BaseModel):
     """机会队列动作：prioritize（提权）/ skip（跳过）/ retry（重试）/ generate_now（立即生成）。"""
 
     action: Literal["prioritize", "skip", "retry", "generate_now"]
     queue_id: str
     payload: dict = Field(default_factory=dict)
+
+
+class AdConfigRequest(BaseModel):
+    """提交中心：更新某功能页（route）的广告闸门配置。至少传一个可改字段。"""
+
+    route: str
+    ad_enabled: Optional[bool] = None
+    ad_seconds: Optional[int] = None
 
 
 class PipelineEnqueueRequest(BaseModel):
@@ -956,6 +983,55 @@ def pipeline_enqueue(req: PipelineEnqueueRequest = PipelineEnqueueRequest()):
 
 
 # ---------------------------------------------------------------------------
+# SECTION: Submit Center — 已上架功能页 + 广告闸门配置
+# ---------------------------------------------------------------------------
+
+@app.get("/api/submit/deployed-apps", dependencies=[Depends(verify_api_key)])
+def get_deployed_apps():
+    """提交中心：列出已上架的功能页（含预览 URL + 当前广告配置）。
+
+    站点未部署（无 telegram.json）→ items 空。每项附 resolve 后的广告配置，
+    供后台展示开关/时长当前值。
+    """
+    from core.publisher.deployed_apps import list_deployed_features
+    from core.publisher.ad_config import load_ad_config, resolve_ad
+
+    features = list_deployed_features(TELEGRAM_AUTH_PATH, FEATURES_REGISTRY_PATH)
+    cfg = load_ad_config(AD_CONFIG_PATH)
+    items = [{**f, "ad": resolve_ad(cfg, f["route"])} for f in features]
+    return {"items": items, "total": len(items)}
+
+
+@app.post("/api/submit/ad-config", dependencies=[Depends(verify_api_key)])
+def update_ad_config(req: AdConfigRequest):
+    """提交中心：更新某功能页广告闸门（上架/下架 + 时长）。返回该 route 最新配置。"""
+    from core.publisher.ad_config import load_ad_config, set_ad, save_ad_config, resolve_ad
+
+    if req.ad_enabled is None and req.ad_seconds is None:
+        return {"ok": False, "error": {"code": "NO_CHANGE", "message": "未提供可更新字段"}}
+    cfg = load_ad_config(AD_CONFIG_PATH)
+    cfg = set_ad(cfg, req.route, enabled=req.ad_enabled, seconds=req.ad_seconds)
+    save_ad_config(AD_CONFIG_PATH, cfg)
+    return {"ok": True, "route": req.route, "ad": resolve_ad(cfg, req.route)}
+
+
+@app.get("/api/tg/ad-config")
+def get_tg_ad_config(route: Optional[str] = Query(default=None)):
+    """TG 站运行时读广告配置（public 免鉴权，跨域被合集站调用）。
+
+    权限边界同 /api/generation/*：生成产物/合集站不持有 DASHBOARD_API_KEY，
+    此只读接口不挂鉴权，且不涉及任何密钥。
+    传 route → 返回该页 resolve 后的 {ad_enabled, ad_seconds}；不传 → 返回整份配置。
+    """
+    from core.publisher.ad_config import load_ad_config, resolve_ad
+
+    cfg = load_ad_config(AD_CONFIG_PATH)
+    if route:
+        return {"ok": True, "route": route, "ad": resolve_ad(cfg, route)}
+    return {"ok": True, "config": cfg}
+
+
+# ---------------------------------------------------------------------------
 # SECTION: Platforms
 # ---------------------------------------------------------------------------
 
@@ -1440,6 +1516,134 @@ def generate_template_endpoint(req: TemplateGenerationRequest, request: Request)
         return {"ok": False, "error": {"code": e.code, "message": e.message, "retryable": retryable}}
     except Exception:
         return {"ok": False, "error": {"code": ERR_FAILED, "message": "生成失败，请稍后重试", "retryable": True}}
+
+
+# ---------------------------------------------------------------------------
+# SECTION: Send generated image to Telegram chat（可存相册）
+# ---------------------------------------------------------------------------
+
+# initData 新鲜度上限：超过则视为过期，拒绝（防重放）。
+INIT_DATA_MAX_AGE = 24 * 3600
+
+
+def verify_telegram_init_data(init_data: str, bot_token: str) -> Optional[dict]:
+    """校验 Telegram WebApp initData 并返回解析出的 user dict（含 id）。
+
+    标准算法：secret = HMAC_SHA256("WebAppData", bot_token)；
+    比对 HMAC_SHA256(secret, data_check_string) 与 initData 中的 hash。
+    校验失败 / 过期 / 无 user 返回 None。绝不信任前端直接传来的 user。
+    """
+    import hashlib
+    from urllib.parse import parse_qsl
+
+    if not init_data or not bot_token:
+        return None
+    try:
+        pairs = parse_qsl(init_data, keep_blank_values=True)
+    except Exception:
+        return None
+    data = dict(pairs)
+    received_hash = data.pop("hash", "")
+    if not received_hash:
+        return None
+
+    # data_check_string：除 hash 外所有字段按 key 排序，以 \n 连接。
+    check_string = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
+    secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
+    calc_hash = hmac.new(secret_key, check_string.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(calc_hash, received_hash):
+        return None
+
+    # 新鲜度：auth_date 不能太旧。
+    try:
+        auth_date = int(data.get("auth_date", "0"))
+        if auth_date <= 0 or (_time.time() - auth_date) > INIT_DATA_MAX_AGE:
+            return None
+    except (ValueError, TypeError):
+        return None
+
+    # 取 user（initData 里 user 是 JSON 串）。
+    try:
+        user = json.loads(data.get("user", ""))
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(user, dict) or "id" not in user:
+        return None
+    return user
+
+
+# data URI base64 体积上限（对齐 12MB 原图 → base64 膨胀约 4/3）。
+MAX_SEND_IMAGE_B64 = 17 * 1024 * 1024
+
+
+@app.post("/api/generation/send-to-chat")
+def send_to_chat_endpoint(req: SendToChatRequest, request: Request):
+    """把生成图发到用户的 Telegram 聊天（public runtime 接口，不挂 dashboard 鉴权）。
+
+    安全：用 bot token 校验 initData 取 chat_id，前端无法把图发给任意用户。
+    image_src 为 data URI → 解码后 multipart 上传；为 http(s) → 作为 photo URL 直传。
+    """
+    if _rate_limited(request):
+        return _RATE_LIMITED_RESPONSE
+
+    if not TELEGRAM_BOT_TOKEN:
+        return {"ok": False, "error": {"code": "NOT_CONFIGURED", "message": "发送服务暂未开启"}}
+
+    user = verify_telegram_init_data(req.init_data, TELEGRAM_BOT_TOKEN)
+    if not user:
+        return {"ok": False, "error": {"code": "INVALID_INIT_DATA", "message": "身份校验失败，请在 Telegram 中打开"}}
+
+    chat_id = user["id"]
+    src = (req.image_src or "").strip()
+    if not src:
+        return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "没有可发送的图片"}}
+    caption = (req.caption or "")[:1024]
+
+    import httpx
+    api_base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+
+    try:
+        if src.startswith("data:"):
+            # data:[<mime>][;base64],<data> → 解码为字节走 multipart。
+            import base64
+            try:
+                header, b64 = src.split(",", 1)
+            except ValueError:
+                return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "图片格式不支持"}}
+            if len(b64) > MAX_SEND_IMAGE_B64:
+                return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "图片过大"}}
+            try:
+                photo_bytes = base64.b64decode(b64)
+            except Exception:
+                return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "图片解码失败"}}
+            with httpx.Client(timeout=30) as client:
+                resp = client.post(
+                    api_base,
+                    data={"chat_id": str(chat_id), "caption": caption},
+                    files={"photo": ("image.png", photo_bytes, "image/png")},
+                )
+        elif src.startswith("http://") or src.startswith("https://"):
+            with httpx.Client(timeout=30) as client:
+                resp = client.post(
+                    api_base,
+                    data={"chat_id": str(chat_id), "caption": caption, "photo": src},
+                )
+        else:
+            return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "图片地址不支持"}}
+    except Exception:
+        return {"ok": False, "error": {"code": "SEND_FAILED", "message": "发送失败，请稍后再试", "retryable": True}}
+
+    # 解析 Telegram 返回。
+    try:
+        body = resp.json()
+    except Exception:
+        body = {}
+    if resp.status_code == 200 and body.get("ok"):
+        return {"ok": True}
+    # 用户没和 bot 对话过 / 拉黑：403。给可操作的友好提示。
+    if resp.status_code == 403:
+        return {"ok": False, "error": {"code": "BOT_BLOCKED", "message": "请先在 Bot 中发送任意消息后重试"}}
+    return {"ok": False, "error": {"code": "SEND_FAILED", "message": "发送失败，请稍后再试", "retryable": True}}
 
 
 # ---------------------------------------------------------------------------

@@ -71,8 +71,12 @@ const platformChoices = [
   { id: 'app_store,google_play', label: 'Dual Source' },
 ]
 
-const limitChoices = [10, 20, 40]
-const generateChoices = [1, 2, 3]
+// 数字输入框校验：空/非法值回退到 fallback，否则取整并夹在 [min, max]。
+function clampInt(raw: string, min: number, max: number, fallback: number): number {
+  const v = Math.floor(Number(raw))
+  if (!Number.isFinite(v)) return fallback
+  return Math.min(Math.max(v, min), max)
+}
 
 function n(v: any, fallback = '0') {
   if (v === undefined || v === null || v === '') return fallback
@@ -263,31 +267,35 @@ function openView(view: OpportunityView) {
 
         <div class="control-block">
           <span class="control-label">Limit</span>
-          <div class="chip-row">
-            <button
-              v-for="choice in limitChoices"
-              :key="choice"
-              class="chip chip--numeric"
-              :class="{ 'chip--active': launchOptions.limit === choice }"
-              @click="updateOptions({ limit: choice })"
-            >
-              {{ choice }}
-            </button>
+          <div class="num-field">
+            <input
+              class="num-input"
+              type="number"
+              min="1"
+              :value="launchOptions.limit"
+              @input="updateOptions({ limit: clampInt(($event.target as HTMLInputElement).value, 1, 500, 50) })"
+            />
+            <div class="num-stepper">
+              <button type="button" class="num-step" @click="updateOptions({ limit: clampInt(String(launchOptions.limit + 1), 1, 500, 50) })">▲</button>
+              <button type="button" class="num-step" @click="updateOptions({ limit: clampInt(String(launchOptions.limit - 1), 1, 500, 50) })">▼</button>
+            </div>
           </div>
         </div>
 
         <div class="control-block">
           <span class="control-label">Generate</span>
-          <div class="chip-row">
-            <button
-              v-for="choice in generateChoices"
-              :key="choice"
-              class="chip chip--numeric"
-              :class="{ 'chip--active': launchOptions.max_generate === choice }"
-              @click="updateOptions({ max_generate: choice })"
-            >
-              {{ choice }}
-            </button>
+          <div class="num-field">
+            <input
+              class="num-input"
+              type="number"
+              min="1"
+              :value="launchOptions.max_generate"
+              @input="updateOptions({ max_generate: clampInt(($event.target as HTMLInputElement).value, 1, 50, 5) })"
+            />
+            <div class="num-stepper">
+              <button type="button" class="num-step" @click="updateOptions({ max_generate: clampInt(String(launchOptions.max_generate + 1), 1, 50, 5) })">▲</button>
+              <button type="button" class="num-step" @click="updateOptions({ max_generate: clampInt(String(launchOptions.max_generate - 1), 1, 50, 5) })">▼</button>
+            </div>
           </div>
         </div>
       </div>
@@ -642,18 +650,20 @@ button:disabled {
 
 .control-block {
   display: grid;
-  gap: 10px;
+  gap: 2px;
+  align-content: start;
 }
 
 .control-inline {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
+  align-items: start;
 }
 
 .control-label {
   color: #6e6e73;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -718,6 +728,65 @@ button:disabled {
 
 .chip--numeric {
   min-width: 52px;
+}
+
+.num-field {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.num-input {
+  width: 64px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #1d1d1f;
+  font-size: 30px;
+  font-weight: 700;
+  text-align: left;
+  outline: none;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* 隐藏原生数字调节箭头，改用右侧自定义步进器 */
+.num-input::-webkit-outer-spin-button,
+.num-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.num-input:focus {
+  background: #f5f5f7;
+}
+
+.num-stepper {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.num-step {
+  border: none;
+  background: #f0f0f3;
+  color: #6e6e73;
+  width: 22px;
+  height: 16px;
+  border-radius: 5px;
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.num-step:hover {
+  background: #1d1d1f;
+  color: #fff;
 }
 
 .chip--active {

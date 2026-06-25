@@ -51,8 +51,8 @@ const busyTaskId = ref('')
 const launchOptions = ref<PipelineLaunchOptions>({
   regions: 'CN,US',
   platforms: 'app_store',
-  limit: 10,
-  max_generate: 1,
+  limit: 50,
+  max_generate: 5,
 })
 
 function setMode(value: PipelineMode) {

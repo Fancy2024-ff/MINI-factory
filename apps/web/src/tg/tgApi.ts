@@ -10,7 +10,9 @@ import type {
   TemplateGenerationRequest,
   TemplateGenerationResponse,
   TemplateResult,
+  ApiError,
 } from './types'
+import { getInitData } from './telegram'
 
 const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -136,6 +138,27 @@ export async function editImage(
       ok: false,
       error: { code: 'NETWORK_ERROR', message: '网络异常，请检查连接后重试', retryable: true },
     }
+  }
+}
+
+// 把生成图发到用户的 Telegram 聊天（可在聊天中存相册）。
+// init_data 由 telegram.getInitData 提供，后端用 bot token 校验取 chat_id。
+export async function sendToChat(
+  imageSrc: string,
+  caption = '',
+): Promise<{ ok: boolean; error?: ApiError }> {
+  try {
+    const res = await fetch(`${BASE}/api/generation/send-to-chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ init_data: getInitData(), image_src: imageSrc, caption }),
+    })
+    if (!res.ok) {
+      return { ok: false, error: { code: 'HTTP_ERROR', message: '发送失败，请稍后再试', retryable: true } }
+    }
+    return (await res.json()) as { ok: boolean; error?: ApiError }
+  } catch {
+    return { ok: false, error: { code: 'NETWORK_ERROR', message: '网络异常，请稍后再试', retryable: true } }
   }
 }
 

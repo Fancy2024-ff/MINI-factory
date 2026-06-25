@@ -312,6 +312,53 @@ describe('StickerPage', () => {
     expect(img.exists()).toBe(true)
     expect(img.attributes('src')).toBe('data:image/jpeg;base64,QUJD')
   })
+
+  it('slices the sheet into a clickable 9-cell grid and a cell click opens the ad gate', async () => {
+    // 桩 Image（立即 onload）+ canvas（getContext/toDataURL），让 sliceGrid 切出 9 张。
+    class FakeImage {
+      crossOrigin = ''
+      naturalWidth = 300
+      naturalHeight = 300
+      onload: (() => void) | null = null
+      onerror: (() => void) | null = null
+      set src(_v: string) { setTimeout(() => this.onload?.(), 0) }
+    }
+    vi.stubGlobal('Image', FakeImage as any)
+    const origCreate = document.createElement.bind(document)
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      if (tag === 'canvas') {
+        return { width: 0, height: 0,
+          getContext: () => ({ drawImage: () => {} }),
+          toDataURL: () => 'data:image/png;base64,CELL' } as any
+      }
+      return origCreate(tag)
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true, template_id: 'sticker-viral', preview_type: 'stickerPack',
+        result: { image_base64: 'QUJD', prompt: '打工人', title: '表情包已生成' },
+      }),
+    } as any))
+
+    const w = mount(StickerPage)
+    await w.find('.prompt-input').setValue('打工人')
+    await w.find('.generate-btn').trigger('click')
+    await new Promise((r) => setTimeout(r, 0)) // 生成完成
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 0)) // sliceGrid 完成
+    await nextTick()
+
+    const cellItems = w.findAll('.cell-item')
+    expect(cellItems.length).toBe(9)
+    // 有「全部下载」按钮
+    expect(w.text()).toContain('全部下载')
+    // 点单个表情 → 弹出看广告遮罩（下载闸门）
+    await cellItems[0].trigger('click')
+    expect(w.find('.ad-overlay').exists()).toBe(true)
+
+    vi.unstubAllGlobals()
+  })
 })
 
 describe('PetTalkPage', () => {
@@ -477,6 +524,104 @@ describe('下载 + 看广告解锁（出图页共用）', () => {
     await nextTick()
     expect(w.find('.ad-overlay').exists()).toBe(false)
     expect(clickSpy).toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+})
+
+describe('downloadImage（环境自适应）', () => {
+  it('Telegram 内 + 远程图：交给 openLink，不走 <a download>', async () => {
+    const openLink = vi.fn()
+    ;(window as any).Telegram = { WebApp: { openLink } }
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    const { downloadImage } = await import('../tg/download')
+    const r = await downloadImage('https://cdn.example.com/a.png', 'a.png')
+
+    expect(r).toBe('opened')
+    expect(openLink).toHaveBeenCalledWith('https://cdn.example.com/a.png')
+    expect(clickSpy).not.toHaveBeenCalled()
+    clickSpy.mockRestore()
+  })
+
+  it('普通浏览器 + 远程图：先 fetch 成 blob 再用 <a download>', async () => {
+    delete (window as any).Telegram
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(['x'], { type: 'image/png' }),
+    } as any))
+    ;(URL as any).createObjectURL = vi.fn(() => 'blob:fake')
+    ;(URL as any).revokeObjectURL = vi.fn()
+    const anchors: HTMLAnchorElement[] = []
+    const orig = document.createElement.bind(document)
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = orig(tag) as any
+      if (tag === 'a') { el.click = () => {}; anchors.push(el) }
+      return el
+    })
+
+    const { downloadImage } = await import('../tg/download')
+    const r = await downloadImage('https://cdn.example.com/a.png', 'a.png')
+
+    expect(r).toBe('downloaded')
+    expect(anchors[0].href).toContain('blob:')
+    expect(anchors[0].download).toBe('a.png')
+    vi.restoreAllMocks()
+  })
+})
+
+describe('发送到聊天（Telegram 内）', () => {
+  it('Telegram 内有 initData：结果区出现「发送到聊天」按钮；普通浏览器不出现', async () => {
+    // 普通浏览器：无 Telegram，按钮不出现。
+    delete (window as any).Telegram
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, template_id: 'avatar-viral', result: { image_base64: 'QUJD', prompt: 'p', title: 't' } }),
+    } as any))
+    let w = mount(AvatarPage)
+    await w.find('.prompt-input').setValue('短发')
+    await w.find('.generate-btn').trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    await nextTick()
+    expect(w.text()).not.toContain('发送到聊天')
+
+    // Telegram 内 + initData：按钮出现。
+    ;(window as any).Telegram = { WebApp: { initData: 'auth_date=1&user=%7B%22id%22%3A1%7D&hash=x' } }
+    w = mount(AvatarPage)
+    await w.find('.prompt-input').setValue('短发')
+    await w.find('.generate-btn').trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    await nextTick()
+    expect(w.text()).toContain('发送到聊天')
+  })
+
+  it('解锁后点击「发送到聊天」调用 sendToChat 接口', async () => {
+    vi.useFakeTimers()
+    ;(window as any).Telegram = { WebApp: { initData: 'auth_date=1&user=%7B%22id%22%3A1%7D&hash=x' } }
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, template_id: 'avatar-viral', result: { image_base64: 'QUJD', prompt: 'p', title: 't' } }),
+    } as any)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const w = mount(AvatarPage)
+    await w.find('.prompt-input').setValue('短发')
+    await w.find('.generate-btn').trigger('click')
+    await vi.advanceTimersByTimeAsync(0)
+    await nextTick()
+
+    const sendBtn = w.findAll('.act').find((b: any) => b.text().includes('发送到聊天'))!
+    await sendBtn.trigger('click')          // 弹广告
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(30000) // 看完广告
+    await w.find('.ad-skip').trigger('click')
+    await vi.advanceTimersByTimeAsync(0)
+    await nextTick()
+
+    // 最后一次 fetch 应打到 send-to-chat。
+    const calledSendToChat = fetchMock.mock.calls.some(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes('/api/generation/send-to-chat'),
+    )
+    expect(calledSendToChat).toBe(true)
     vi.useRealTimers()
   })
 })

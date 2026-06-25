@@ -1,6 +1,7 @@
 ﻿<script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { JobDetail } from '../types/job'
+import { api } from '../services/api'
 
 const props = defineProps<{
   job: JobDetail | null
@@ -56,6 +57,13 @@ function hasArtifact(key: string): boolean {
   return !!props.job.artifacts[key]
 }
 
+// 是否有可下载到浏览器的原始内容。miniapp/dist/publish-package 是派生状态而非
+// artifacts 里的实体数据，没有可下载内容，因此不展示下载按钮。
+function canDownload(key: string): boolean {
+  const data = props.job?.artifacts?.[key]
+  return data !== undefined && data !== null
+}
+
 function getArtifactPreview(key: string): string {
   if (!props.job?.artifacts) return ''
   const data = props.job.artifacts[key]
@@ -78,6 +86,52 @@ function copyArtifact(key: string) {
   if (!data) return
   const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2)
   navigator.clipboard.writeText(text)
+}
+
+// 下载产物到浏览器：按 key 推断文件名/类型，字符串原样存，对象存为美化 JSON。
+function downloadArtifact(key: string) {
+  if (!props.job?.artifacts) return
+  const data = props.job.artifacts[key]
+  if (data === undefined || data === null) return
+  const isString = typeof data === 'string'
+  const text = isString ? data : JSON.stringify(data, null, 2)
+  // key 自带扩展名（candidate.json / prd.md）就直接用；否则按内容补 .json/.txt。
+  const hasExt = /\.[a-z0-9]+$/i.test(key)
+  const filename = hasExt ? key : `${key}.${isString ? 'txt' : 'json'}`
+  const mime = filename.endsWith('.json') ? 'application/json'
+    : filename.endsWith('.md') ? 'text/markdown'
+    : 'text/plain'
+  const blob = new Blob([text], { type: `${mime};charset=utf-8` })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+// miniapp / dist 是磁盘目录而非文本产物，下载需后端打包成 zip。
+const ZIP_TARGETS: Record<string, 'miniapp' | 'dist'> = {
+  miniapp: 'miniapp',
+  dist: 'dist',
+}
+function canZipDownload(key: string): boolean {
+  return key in ZIP_TARGETS && hasArtifact(key)
+}
+const zipDownloading = ref<string>('')
+async function downloadZipArtifact(key: string) {
+  const target = ZIP_TARGETS[key]
+  if (!target || !props.job?.id || zipDownloading.value) return
+  zipDownloading.value = key
+  try {
+    await api.downloadJobZip(props.job.id, target)
+  } catch (e) {
+    console.error('下载失败', e)
+  } finally {
+    zipDownloading.value = ''
+  }
 }
 
 // 传播闭环产品化分层（P0-2）：区分「产品层已接入 / 只有文档 / 缺失」。
@@ -216,7 +270,11 @@ const commercialLoop = computed(() => {
           <p class="item-purpose">{{ item.purpose }}</p>
           <p v-if="hasArtifact(item.key)" class="item-preview">{{ getArtifactPreview(item.key) }}</p>
           <div class="item-actions" v-if="hasArtifact(item.key)">
-            <button class="action-btn" @click="copyArtifact(item.key)">复制</button>
+            <button v-if="canDownload(item.key)" class="action-btn" @click="copyArtifact(item.key)">复制</button>
+            <button v-if="canDownload(item.key)" class="action-btn action-btn--download" @click="downloadArtifact(item.key)">下载</button>
+            <button v-if="canZipDownload(item.key)" class="action-btn action-btn--download" :disabled="zipDownloading === item.key" @click="downloadZipArtifact(item.key)">
+              {{ zipDownloading === item.key ? '打包中…' : '下载 ZIP' }}
+            </button>
           </div>
         </div>
       </div>
@@ -236,7 +294,11 @@ const commercialLoop = computed(() => {
           <p class="item-purpose">{{ item.purpose }}</p>
           <p v-if="hasArtifact(item.key)" class="item-preview">{{ getArtifactPreview(item.key) }}</p>
           <div class="item-actions" v-if="hasArtifact(item.key)">
-            <button class="action-btn" @click="copyArtifact(item.key)">复制</button>
+            <button v-if="canDownload(item.key)" class="action-btn" @click="copyArtifact(item.key)">复制</button>
+            <button v-if="canDownload(item.key)" class="action-btn action-btn--download" @click="downloadArtifact(item.key)">下载</button>
+            <button v-if="canZipDownload(item.key)" class="action-btn action-btn--download" :disabled="zipDownloading === item.key" @click="downloadZipArtifact(item.key)">
+              {{ zipDownloading === item.key ? '打包中…' : '下载 ZIP' }}
+            </button>
           </div>
         </div>
       </div>
@@ -291,7 +353,11 @@ const commercialLoop = computed(() => {
           <p class="item-purpose">{{ item.purpose }}</p>
           <p v-if="hasArtifact(item.key)" class="item-preview">{{ getArtifactPreview(item.key) }}</p>
           <div class="item-actions" v-if="hasArtifact(item.key)">
-            <button class="action-btn" @click="copyArtifact(item.key)">复制</button>
+            <button v-if="canDownload(item.key)" class="action-btn" @click="copyArtifact(item.key)">复制</button>
+            <button v-if="canDownload(item.key)" class="action-btn action-btn--download" @click="downloadArtifact(item.key)">下载</button>
+            <button v-if="canZipDownload(item.key)" class="action-btn action-btn--download" :disabled="zipDownloading === item.key" @click="downloadZipArtifact(item.key)">
+              {{ zipDownloading === item.key ? '打包中…' : '下载 ZIP' }}
+            </button>
           </div>
         </div>
       </div>
@@ -311,7 +377,11 @@ const commercialLoop = computed(() => {
           <p class="item-purpose">{{ item.purpose }}</p>
           <p v-if="hasArtifact(item.key)" class="item-preview">{{ getArtifactPreview(item.key) }}</p>
           <div class="item-actions" v-if="hasArtifact(item.key)">
-            <button class="action-btn" @click="copyArtifact(item.key)">复制</button>
+            <button v-if="canDownload(item.key)" class="action-btn" @click="copyArtifact(item.key)">复制</button>
+            <button v-if="canDownload(item.key)" class="action-btn action-btn--download" @click="downloadArtifact(item.key)">下载</button>
+            <button v-if="canZipDownload(item.key)" class="action-btn action-btn--download" :disabled="zipDownloading === item.key" @click="downloadZipArtifact(item.key)">
+              {{ zipDownloading === item.key ? '打包中…' : '下载 ZIP' }}
+            </button>
           </div>
         </div>
       </div>
@@ -455,6 +525,17 @@ const commercialLoop = computed(() => {
 }
 .action-btn:hover {
   background: rgba(0, 0, 0, 0.03);
+}
+.action-btn--download {
+  border-color: var(--color-primary, #2563eb);
+  color: var(--color-primary, #2563eb);
+}
+.action-btn--download:hover {
+  background: rgba(37, 99, 235, 0.06);
+}
+.action-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .empty-state {

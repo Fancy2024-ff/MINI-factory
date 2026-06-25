@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import FactoryConsole from '../components/FactoryConsole.vue'
 import DecisionOverview from '../components/DecisionOverview.vue'
 import DeliverablesPanel from '../components/DeliverablesPanel.vue'
+import { api } from '../services/api'
 import type { JobDetail } from '../types/job'
 
 // 一个核心模板（avatar-viral）真实接入传播闭环的 job：generator-source + growth-qa 都到位。
@@ -155,6 +156,54 @@ describe('DeliverablesPanel propagation productization', () => {
     const status = wrapper.find('[data-testid="propagation-status"]')
     expect(status.exists()).toBe(true)
     expect(status.text()).toContain('产品层已接入')
+  })
+
+  it('每个有内容的交付物卡片都有「下载」按钮，下载会触发浏览器保存', () => {
+    const job: JobDetail = {
+      id: 'job-dl',
+      path: '/tmp/dl',
+      artifacts: {
+        'candidate.json': { name_cn: '表情包' },
+        'prd.md': '# 表情包 小程序 — 产品需求文档',
+      },
+    }
+    const wrapper = mount(DeliverablesPanel, { props: { job } })
+    const downloadBtns = wrapper.findAll('.action-btn--download')
+    expect(downloadBtns.length).toBeGreaterThanOrEqual(2)
+
+    // 点击下载：应创建带 download 属性的 <a> 并触发 click。
+    const created: HTMLAnchorElement[] = []
+    const origCreate = document.createElement.bind(document)
+    const createSpy = vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = origCreate(tag) as HTMLAnchorElement
+      if (tag === 'a') { el.click = () => {}; created.push(el) }
+      return el as any
+    })
+    ;(URL as any).createObjectURL = vi.fn(() => 'blob:fake')
+    ;(URL as any).revokeObjectURL = vi.fn()
+
+    downloadBtns[0].trigger('click')
+    expect(created.length).toBe(1)
+    expect(created[0].download).toBe('candidate.json')
+    createSpy.mockRestore()
+  })
+
+  it('小程序源码 / 构建产物 卡片提供「下载 ZIP」按钮，点击调用 zip 接口', async () => {
+    const dlSpy = vi.spyOn(api, 'downloadJobZip').mockResolvedValue()
+    const job: JobDetail = {
+      id: 'job-zip',
+      path: '/tmp/zip',
+      miniapp_path: '/tmp/zip/generated/miniapp',
+      artifacts: {
+        'qa-report.json': { checks: { dist_exists: true } },
+      },
+    }
+    const wrapper = mount(DeliverablesPanel, { props: { job } })
+    const zipBtns = wrapper.findAll('.action-btn--download').filter((b: any) => b.text().includes('ZIP'))
+    expect(zipBtns.length).toBe(2)  // 小程序源码 + 构建产物
+    await zipBtns[0].trigger('click')
+    expect(dlSpy).toHaveBeenCalledWith('job-zip', 'miniapp')
+    dlSpy.mockRestore()
   })
 
   it('marks doc-only (no growth loop) as 只有文档 / 缺失', () => {

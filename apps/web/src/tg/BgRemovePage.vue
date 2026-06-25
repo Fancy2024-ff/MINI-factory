@@ -41,7 +41,8 @@
         <img class="result-img" :src="display.src" alt="去背景结果" />
       </div>
       <div class="result-actions">
-        <button class="act primary" @click="backToForm">🔄 换一张</button>
+        <button v-if="canSend" class="act primary" @click="handleSendToChat">📩 发送到聊天</button>
+        <button class="act" @click="backToForm">🔄 换一张</button>
         <button class="act" @click="handleDownload">⬇ 下载</button>
       </div>
       <div v-if="toast" class="toast">{{ toast }}</div>
@@ -53,8 +54,8 @@
 <!-- SCRIPT_PLACEHOLDER -->
 <script setup lang="ts">
 import { ref } from 'vue'
-import { editImage, toDisplayImage, runUntilImage } from './tgApi'
-import { haptic } from './telegram'
+import { editImage, toDisplayImage, runUntilImage, sendToChat } from './tgApi'
+import { haptic, canSendToChat } from './telegram'
 import { useDownloadGate, downloadImage } from './download'
 import AdGateOverlay from './AdGateOverlay.vue'
 import type { DisplayImage } from './types'
@@ -124,9 +125,25 @@ const { adVisible, adRemain, requestDownload, claim } = useDownloadGate()
 
 function handleDownload() {
   if (!display.value) { showToast('还没有可下载的图片'); return }
-  requestDownload(() => {
-    const ok = downloadImage(display.value!.src, 'bg-removed-' + Date.now() + '.png')
-    showToast(ok ? '已开始下载 ✓' : '下载失败，请长按图片保存')
+  requestDownload(async () => {
+    const r = await downloadImage(display.value!.src, 'bg-removed-' + Date.now() + '.png')
+    if (r === 'downloaded') showToast('已开始下载 ✓')
+    else if (r === 'opened') showToast('已在浏览器打开，长按图片即可保存')
+    else if (r === 'sent') showToast('已发送到聊天 ✓ 点开图片可存相册')
+    else showToast('下载失败，请长按图片保存')
+  })
+}
+
+// Telegram 内：把图发到聊天，用户点开即可原生存相册。复用同一看广告解锁闸门。
+const canSend = canSendToChat()
+function handleSendToChat() {
+  if (!display.value) { showToast('还没有可发送的图片'); return }
+  requestDownload(async () => {
+    showToast('正在发送…')
+    const r = await sendToChat(display.value!.src, display.value!.caption || '')
+    if (r.ok) showToast('已发送到聊天 ✓ 点开图片可存相册')
+    else if (r.error?.code === 'BOT_BLOCKED') showToast('请先在 Bot 中发送任意消息后重试')
+    else showToast('发送失败，请稍后再试')
   })
 }
 

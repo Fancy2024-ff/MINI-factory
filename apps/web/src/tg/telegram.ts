@@ -24,7 +24,11 @@ interface TgWebApp {
   }
   HapticFeedback?: { impactOccurred?: (style: string) => void }
   openTelegramLink?: (url: string) => void
+  openLink?: (url: string, options?: { try_instant_view?: boolean }) => void
   switchInlineQuery?: (query: string, types?: string[]) => void
+  initData?: string
+  platform?: string
+  version?: string
 }
 
 export function getTelegram(): TgWebApp | null {
@@ -75,4 +79,29 @@ export function shareInTelegram(text: string): boolean {
     }
   }
   return false
+}
+
+// 在系统浏览器打开链接。Telegram 内置 WebView 不支持 <a download>，
+// 用 openLink 把图片交给系统浏览器/相册保存。返回是否走了 Telegram 通道。
+export function openLink(url: string): boolean {
+  const tg = getTelegram()
+  if (tg?.openLink) {
+    try {
+      tg.openLink(url)
+      return true
+    } catch {
+      return false
+    }
+  }
+  return false
+}
+
+// Telegram WebApp 下发的已签名 initData（后端用 bot token 校验取 chat_id）。
+export function getInitData(): string {
+  return getTelegram()?.initData || ''
+}
+
+// 是否具备「发送到聊天」条件：在 Telegram 内且拿到了 initData。
+export function canSendToChat(): boolean {
+  return isInTelegram() && getInitData() !== ''
 }

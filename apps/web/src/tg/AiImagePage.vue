@@ -66,7 +66,8 @@
       </div>
 
       <div class="result-actions">
-        <button class="act primary" @click="handleDownload">⬇ 下载高清图</button>
+        <button v-if="canSend" class="act primary" @click="handleSendToChat">📩 发送到聊天（可存相册）</button>
+        <button class="act" :class="{ primary: !canSend }" @click="handleDownload">⬇ 下载高清图</button>
         <button class="act" @click="regenerate">🔄 再生成</button>
         <button class="act" @click="regenerateSame">✨ 生成同款</button>
         <button class="act" @click="copyPrompt">📋 复制描述</button>
@@ -83,8 +84,8 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { generateImage, toDisplayImage, MAX_PROMPT_LEN, runUntilImage } from './tgApi'
-import { haptic, shareInTelegram, isInTelegram } from './telegram'
+import { generateImage, toDisplayImage, MAX_PROMPT_LEN, runUntilImage, sendToChat } from './tgApi'
+import { haptic, shareInTelegram, isInTelegram, canSendToChat } from './telegram'
 import { useDownloadGate, downloadImage } from './download'
 import AdGateOverlay from './AdGateOverlay.vue'
 import type { AspectRatio, DisplayImage } from './types'
@@ -180,9 +181,25 @@ function share() {
 const { adVisible, adRemain, requestDownload, claim } = useDownloadGate()
 function handleDownload() {
   if (!display.value) { showToast('还没有可下载的图片'); return }
-  requestDownload(() => {
-    const ok = downloadImage(display.value!.src, 'ai-image-' + Date.now() + '.png')
-    showToast(ok ? '已开始下载 ✓' : '下载失败，请长按图片保存')
+  requestDownload(async () => {
+    const r = await downloadImage(display.value!.src, 'ai-image-' + Date.now() + '.png')
+    if (r === 'downloaded') showToast('已开始下载 ✓')
+    else if (r === 'opened') showToast('已在浏览器打开，长按图片即可保存')
+    else if (r === 'sent') showToast('已发送到聊天 ✓ 点开图片可存相册')
+    else showToast('下载失败，请长按图片保存')
+  })
+}
+
+// Telegram 内：把图发到聊天，用户点开即可原生存相册。复用同一看广告解锁闸门。
+const canSend = canSendToChat()
+function handleSendToChat() {
+  if (!display.value) { showToast('还没有可发送的图片'); return }
+  requestDownload(async () => {
+    showToast('正在发送…')
+    const r = await sendToChat(display.value!.src, display.value!.caption || '')
+    if (r.ok) showToast('已发送到聊天 ✓ 点开图片可存相册')
+    else if (r.error?.code === 'BOT_BLOCKED') showToast('请先在 Bot 中发送任意消息后重试')
+    else showToast('发送失败，请稍后再试')
   })
 }
 
