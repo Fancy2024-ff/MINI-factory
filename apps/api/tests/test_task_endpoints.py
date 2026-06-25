@@ -161,3 +161,21 @@ def test_start_async_and_enqueue_share_store(server_client, auth_headers):
     assert summary["total"] == 2
     assert summary["by_kind"]["pipeline.run"] == 1
     assert summary["by_kind"]["opportunity.crawl"] == 1
+
+
+def test_tasks_health_requires_key(server_client):
+    client, _ = server_client
+    assert client.get("/api/tasks/health").status_code == 401
+
+
+def test_tasks_health_shape(server_client, auth_headers):
+    client, _ = server_client
+    _enqueue(client, auth_headers, payload={"mode": "queue"})
+    res = client.get("/api/tasks/health", headers=auth_headers)
+    assert res.status_code == 200
+    body = res.json()
+    for key in ("total", "pending", "running", "succeeded", "failed", "cancelled",
+                "oldest_pending_seconds", "running_count", "active_worker_count"):
+        assert key in body
+    assert body["total"] == 1
+    assert body["pending"] == 1

@@ -845,6 +845,12 @@ def tasks_summary():
     return _task_store().task_summary()
 
 
+@app.get("/api/tasks/health", dependencies=[Depends(verify_api_key)])
+def tasks_health():
+    """队列健康指标：状态计数 + 最老 pending 等待 + 活跃 worker 近似数。"""
+    return _task_store().health_summary()
+
+
 @app.get("/api/tasks", dependencies=[Depends(verify_api_key)])
 def list_tasks(
     status: Optional[str] = Query(default=None),
@@ -1432,8 +1438,14 @@ def generate_template_endpoint(req: TemplateGenerationRequest, request: Request)
 # ---------------------------------------------------------------------------
 
 @app.get("/api/jobs/{job_id}/download", dependencies=[Depends(verify_api_key)])
-def download_job(job_id: str):
-    """Download all job artifacts as a zip file."""
+def download_job(job_id: str, target: str = "all"):
+    """Download job artifacts as a zip file.
+
+    target:
+      all     -> entire job directory (default)
+      miniapp -> generated/miniapp source tree (小程序源码)
+      dist    -> generated/miniapp/dist build output (构建产物)
+    """
     import zipfile
     import tempfile
     from fastapi.responses import FileResponse
@@ -1445,15 +1457,35 @@ def download_job(job_id: str):
     if not job_dir.exists():
         raise HTTPException(404, "Job not found")
 
+    # Resolve which subtree to zip; every root is validated to stay under job_dir.
+    targets = {
+        "all": (job_dir, f"miniapp-factory-{job_id}.zip"),
+        "miniapp": (job_dir / "generated" / "miniapp", f"miniapp-source-{job_id}.zip"),
+        "dist": (job_dir / "generated" / "miniapp" / "dist", f"miniapp-dist-{job_id}.zip"),
+    }
+    if target not in targets:
+        raise HTTPException(400, f"Invalid target: {target}")
+    root_dir, download_name = targets[target]
+
+    # Security: resolved root must stay within job_dir.
+    try:
+        root_dir.resolve().relative_to(job_dir.resolve())
+    except ValueError:
+        raise HTTPException(403, "Access denied")
+    if not root_dir.exists():
+        raise HTTPException(404, f"Nothing to download for target: {target}")
+
     # Collect files and enforce size cap
     total_size = 0
     files_to_zip = []
-    for f in job_dir.rglob("*"):
+    for f in root_dir.rglob("*"):
         if f.is_file() and "node_modules" not in str(f):
             total_size += f.stat().st_size
             if total_size > MAX_ZIP_SIZE:
                 raise HTTPException(413, "Job artifacts exceed maximum download size (100MB)")
             files_to_zip.append(f)
+    if not files_to_zip:
+        raise HTTPException(404, f"Nothing to download for target: {target}")
 
     # Create zip in temp directory
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
@@ -1461,7 +1493,7 @@ def download_job(job_id: str):
 
     with zipfile.ZipFile(tmp.name, 'w', zipfile.ZIP_DEFLATED) as zf:
         for f in files_to_zip:
-            arcname = str(f.relative_to(job_dir))
+            arcname = str(f.relative_to(root_dir))
             zf.write(f, arcname)
 
     # BackgroundTask to clean up temp file after response is sent
@@ -1474,7 +1506,7 @@ def download_job(job_id: str):
     return FileResponse(
         tmp.name,
         media_type="application/zip",
-        filename=f"miniapp-factory-{job_id}.zip",
+        filename=download_name,
         background=BackgroundTask(cleanup),
     )
 
