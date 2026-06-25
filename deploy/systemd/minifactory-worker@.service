@@ -1,0 +1,17 @@
+[Unit]
+Description=MINI-factory task worker (%i)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mini-factory
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/mini-factory
+ExecStart=/usr/bin/python3 -m core.pipeline.task_worker --worker-id worker-%i
+Restart=always
+RestartSec=3
+StandardOutput=append:/opt/mini-factory/data/runtime/logs/worker-%i.out.log
+StandardError=append:/opt/mini-factory/data/runtime/logs/worker-%i.err.log
+
+[Install]
+WantedBy=multi-user.target
