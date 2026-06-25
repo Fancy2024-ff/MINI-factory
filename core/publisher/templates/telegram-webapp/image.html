@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>{{APP_NAME}}</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif; background: var(--bg); min-height: 100vh; }
+    :root {
+      --bg: #f2f2f7; --card: #ffffff; --primary: #007aff; --text: #1c1c1e;
+      --text2: #8e8e93; --text3: #aeaeb2; --border: #e5e5ea;
+    }
+    .container { max-width: 500px; margin: 0 auto; padding: 20px 16px 40px; }
+    .header { text-align: center; padding: 28px 0 20px; }
+    .header-icon { font-size: 48px; margin-bottom: 12px; }
+    .header h1 { font-size: 26px; font-weight: 700; color: var(--text); letter-spacing: -0.5px; }
+    .header p { font-size: 15px; color: var(--text2); margin-top: 6px; }
+    .card { background: var(--card); border-radius: 16px; padding: 20px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.03); }
+    .input-label { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; display: block; }
+    textarea { width: 100%; min-height: 110px; border: none; background: var(--bg); border-radius: 12px; padding: 14px 16px; font-size: 16px; line-height: 1.5; resize: none; outline: none; color: var(--text); }
+    textarea:focus { box-shadow: 0 0 0 2px var(--primary); background: #fff; }
+    textarea::placeholder { color: var(--text3); }
+    .btn { width: 100%; padding: 16px; background: var(--primary); color: #fff; border: none; border-radius: 12px; font-size: 17px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    .btn:active { transform: scale(0.98); opacity: 0.9; }
+    .btn:disabled { background: var(--text3); transform: none; cursor: default; }
+    .btn-secondary { background: var(--bg); color: var(--primary); }
+    .btn-secondary:active { background: var(--border); }
+    .result-img { width: 100%; border-radius: 12px; display: block; background: var(--bg); }
+    .progress-wrap { text-align: center; padding: 28px 0; }
+    .spinner { width: 44px; height: 44px; border: 4px solid var(--border); border-top-color: var(--primary); border-radius: 50%; margin: 0 auto 16px; animation: spin 0.9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress-text { font-size: 15px; color: var(--text2); }
+    .actions { display: flex; gap: 10px; margin-top: 16px; }
+    .actions .btn { flex: 1; padding: 14px; font-size: 15px; }
+    .hidden { display: none !important; }
+    .toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); background: var(--text); color: #fff; padding: 10px 20px; border-radius: 20px; font-size: 14px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 99; max-width: 80%; text-align: center; }
+    .toast.show { opacity: 1; }
+    .ad-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.92); z-index: 200; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #fff; padding: 24px; }
+    .ad-overlay .ad-box { width: 100%; max-width: 420px; aspect-ratio: 16/10; background: linear-gradient(135deg,#1f2937,#374151); border-radius: 16px; display: flex; align-items: center; justify-content: center; font-size: 40px; margin-bottom: 20px; }
+    .ad-countdown { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+    .ad-hint { font-size: 13px; color: #9ca3af; }
+    .ad-skip { margin-top: 18px; font-size: 13px; color: #9ca3af; background: none; border: 1px solid #4b5563; color: #d1d5db; padding: 8px 18px; border-radius: 20px; }
+    .ad-skip:disabled { opacity: 0.4; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- 输入态 -->
+    <div id="view-form">
+      <div class="header">
+        <div class="header-icon">{{APP_ICON}}</div>
+        <h1>{{APP_NAME}}</h1>
+        <p>{{APP_SUBTITLE}}</p>
+      </div>
+      <div class="card">
+        <span class="input-label">描述你想生成的图片</span>
+        <textarea id="input" placeholder="{{INPUT_PLACEHOLDER}}"></textarea>
+      </div>
+      <button class="btn" id="submit" onclick="handleGenerate()">✨ 开始生成</button>
+    </div>
+
+    <!-- 生成中态：进度条（永不展示失败，后台静默重试） -->
+    <div id="view-loading" class="hidden">
+      <div class="header"><h1>{{APP_NAME}}</h1></div>
+      <div class="card progress-wrap">
+        <div class="spinner"></div>
+        <div class="progress-text" id="progress-text">正在生成，请稍候…</div>
+      </div>
+    </div>
+
+    <!-- 结果态：出图 + 下载（下载前 30s 广告倒计时解锁） -->
+    <div id="view-result" class="hidden">
+      <div class="header"><div class="header-icon">✨</div><h1>生成完成</h1></div>
+      <div class="card">
+        <img id="result-img" class="result-img" alt="生成结果" />
+        <div class="actions">
+          <button class="btn btn-secondary" onclick="goBack()">← 再生成一张</button>
+          <button class="btn" id="download-btn" onclick="handleDownload()">⬇ 下载</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 30s 广告倒计时遮罩 -->
+  <div id="ad-overlay" class="ad-overlay hidden">
+    <div class="ad-box">📺</div>
+    <div class="ad-countdown" id="ad-countdown">广告 30s</div>
+    <div class="ad-hint">观看广告后即可下载高清图片</div>
+    <button class="ad-skip" id="ad-skip" disabled>请稍候…</button>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script>
+    if (window.Telegram && window.Telegram.WebApp) {
+      Telegram.WebApp.ready();
+      Telegram.WebApp.expand();
+      var theme = Telegram.WebApp.themeParams;
+      if (theme && theme.bg_color) {
+        document.documentElement.style.setProperty('--bg', theme.secondary_bg_color || '#f2f2f7');
+        document.documentElement.style.setProperty('--card', theme.bg_color || '#ffffff');
+        document.documentElement.style.setProperty('--text', theme.text_color || '#1c1c1e');
+        document.documentElement.style.setProperty('--text2', theme.hint_color || '#8e8e93');
+      }
+    }
+
+    // 后端出图接口（key 留在服务器，前端只发 prompt）。
+    var CONFIG = {
+      apiBase: '{{API_BASE}}',
+      templateId: '{{TEMPLATE_ID}}',
+      style: '{{STYLE}}',
+      adSeconds: 30
+    };
+    var MAX_PROMPT_LEN = 1000;
+    var lastImageData = '';   // data: URL 或 http(s) URL，供下载用
+    var downloadUnlocked = false;
+
+    function showToast(msg) {
+      var t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(function(){ t.classList.remove('show'); }, 2200);
+    }
+    function show(id) { document.getElementById(id).classList.remove('hidden'); }
+    function hide(id) { document.getElementById(id).classList.add('hidden'); }
+    function sleep(ms) { return new Promise(function(r){ setTimeout(r, ms); }); }
+
+    var PROGRESS_MSGS = ['正在生成，请稍候…','AI 正在创作中…','马上就好…','再等一下下…'];
+
+    // 单次出图请求。返回 {url} 成功；抛出 {fatal:bool} 表示是否该停止重试。
+    async function generateOnce(prompt) {
+      var res = await fetch(CONFIG.apiBase + '/api/generation/image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template_id: CONFIG.templateId, prompt: prompt, style: CONFIG.style, aspect_ratio: '1:1' })
+      });
+      if (res.status === 429) { var e = new Error('rate'); e.retryAfter = 6000; throw e; }
+      if (!res.ok) throw new Error('http_' + res.status);
+      var data = await res.json();
+      if (data && data.ok && data.result) {
+        var b64 = data.result.image_base64, url = data.result.image_url;
+        if (b64) return 'data:image/png;base64,' + b64;
+        if (url) return url;
+        throw new Error('empty_result');
+      }
+      // ok:false。retryable=false（配置类错误）才算 fatal，其余继续重试。
+      var err = (data && data.error) || {};
+      var e2 = new Error(err.code || 'unknown');
+      e2.fatal = (err.retryable === false);
+      throw e2;
+    }
+
+    // 出图主流程：对用户隐藏失败，后台静默重试直到成功。
+    // 退避递增、封顶，避免打爆后端限流；仅配置类 fatal 错误才停。
+    async function generateWithRetry(prompt) {
+      var attempt = 0;
+      while (true) {
+        attempt++;
+        document.getElementById('progress-text').textContent =
+          PROGRESS_MSGS[Math.min(attempt - 1, PROGRESS_MSGS.length - 1)];
+        try {
+          return await generateOnce(prompt);
+        } catch (e) {
+          if (e && e.fatal) throw e;   // 配置类错误无法靠重试解决
+          // provider 偶发抽风（retryable）：快速重试咬住成功窗口，仅对限流退避。
+          var wait = e && e.retryAfter ? e.retryAfter : Math.min(600 + attempt * 500, 5000);
+          await sleep(wait);
+          // 不向用户暴露任何失败，继续下一轮
+        }
+      }
+    }
+
+    async function handleGenerate() {
+      var input = document.getElementById('input').value.trim();
+      if (!input) { showToast('请输入图片描述'); return; }
+      if (input.length > MAX_PROMPT_LEN) { showToast('描述太长，请精简一下'); return; }
+      hide('view-form'); show('view-loading');
+      try {
+        var img = await generateWithRetry(input);
+        lastImageData = img;
+        downloadUnlocked = false;
+        document.getElementById('result-img').src = img;
+        document.getElementById('download-btn').textContent = '⬇ 下载';
+        hide('view-loading'); show('view-result');
+      } catch (e) {
+        // 仅在确实无法重试（配置类）时回到输入态，给中性提示
+        hide('view-loading'); show('view-form');
+        showToast('服务暂时不可用，请稍后再试');
+      }
+    }
+
+    function goBack() {
+      hide('view-result'); hide('view-loading'); show('view-form');
+    }
+    // SCRIPT2_PLACEHOLDER
+    // 下载：未解锁先看 30s 广告倒计时，倒计时结束后才真正下载。
+    function handleDownload() {
+      if (!lastImageData) { showToast('还没有可下载的图片'); return; }
+      if (downloadUnlocked) { doDownload(); return; }
+      startAdCountdown();
+    }
+
+    function startAdCountdown() {
+      var overlay = document.getElementById('ad-overlay');
+      var cd = document.getElementById('ad-countdown');
+      var skip = document.getElementById('ad-skip');
+      var remain = CONFIG.adSeconds;
+      overlay.classList.remove('hidden');
+      skip.disabled = true;
+      skip.textContent = '请观看广告…';
+      cd.textContent = '广告 ' + remain + 's';
+      var timer = setInterval(function () {
+        remain--;
+        if (remain > 0) {
+          cd.textContent = '广告 ' + remain + 's';
+        } else {
+          clearInterval(timer);
+          cd.textContent = '广告结束 ✓';
+          skip.disabled = false;
+          skip.textContent = '领取并下载';
+          downloadUnlocked = true;
+        }
+      }, 1000);
+      skip.onclick = function () {
+        if (skip.disabled) return;
+        overlay.classList.add('hidden');
+        doDownload();
+      };
+    }
+
+    function doDownload() {
+      try {
+        if (window.Telegram && Telegram.WebApp && lastImageData.indexOf('http') === 0) {
+          // http(s) 图片：用 Telegram 原生打开（可长按保存）
+          Telegram.WebApp.openLink(lastImageData);
+          showToast('已打开图片，长按即可保存');
+          return;
+        }
+        var a = document.createElement('a');
+        a.href = lastImageData;
+        a.download = 'image_' + Date.now() + '.png';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        showToast('已开始下载 ✓');
+      } catch (e) {
+        showToast('下载失败，请长按图片保存');
+      }
+    }
+  </script>
+</body>
+</html>

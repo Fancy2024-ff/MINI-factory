@@ -27,6 +27,13 @@ IMAGE_GENERATION_API_KEY = config.IMAGE_GENERATION_API_KEY
 IMAGE_GENERATION_PROVIDER = config.IMAGE_GENERATION_PROVIDER
 IMAGE_GENERATION_TIMEOUT_SECONDS = config.IMAGE_GENERATION_TIMEOUT_SECONDS
 
+# Image-to-image editing (background removal etc.). Uses an OpenAI-compatible
+# /images/edits endpoint with a model that supports edits (e.g. gpt-image-2).
+# Derived from the base endpoint by default; overridable via env.
+import os as _os
+IMAGE_EDIT_ENDPOINT = _os.getenv("IMAGE_EDIT_ENDPOINT", "")
+IMAGE_EDIT_MODEL = _os.getenv("IMAGE_EDIT_MODEL", "gpt-image-2")
+
 _SENSITIVE_RESPONSE_KEYS = {
     "api_key",
     "apikey",
@@ -252,3 +259,73 @@ def generate_image(prompt: str, style: str = "", aspect_ratio: str = "1:1") -> d
     payload = _build_payload(prompt, style, aspect_ratio)
     raw = _post(IMAGE_GENERATION_ENDPOINT, payload, IMAGE_GENERATION_TIMEOUT_SECONDS)
     return _normalize_response(raw, prompt)
+
+
+def _edits_endpoint() -> str:
+    """Resolve the /images/edits endpoint.
+
+    Explicit IMAGE_EDIT_ENDPOINT wins; otherwise derive from the base endpoint
+    by swapping a trailing /chat/completions (or appending) with /images/edits.
+    """
+    if IMAGE_EDIT_ENDPOINT:
+        return IMAGE_EDIT_ENDPOINT
+    base = IMAGE_GENERATION_ENDPOINT or ""
+    if "/chat/completions" in base:
+        return base.replace("/chat/completions", "/images/edits")
+    if base.endswith("/v1") or base.endswith("/v1/"):
+        return base.rstrip("/") + "/images/edits"
+    # Last resort: strip a trailing path segment and append.
+    return base.rsplit("/", 1)[0] + "/images/edits" if base else ""
+
+
+# Default instruction for background removal; callers may override via prompt.
+BG_REMOVE_PROMPT = (
+    "Remove the background completely. Keep only the main subject, "
+    "fully intact and unchanged. Replace the background with pure solid white."
+)
+
+
+def edit_image(image_bytes: bytes, prompt: str, *, filename: str = "image.png",
+               mime_type: str = "image/png") -> dict[str, Any]:
+    """Image-to-image edit (e.g. background removal) via /images/edits.
+
+    Sends the uploaded image plus an edit instruction; returns the same
+    normalized shape as generate_image ({image_url, image_base64, ...}).
+    Never leaks provider credentials or raw provider errors.
+    """
+    prompt = (prompt or "").strip()
+    if not prompt:
+        raise ImageGenerationError(ERR_FAILED, "Edit prompt is required.")
+    if not image_bytes:
+        raise ImageGenerationError(ERR_FAILED, "Image is required.")
+    endpoint = _edits_endpoint()
+    if not endpoint:
+        raise ImageGenerationError(ERR_NOT_CONFIGURED, "Image edit endpoint is not configured.")
+    if not IMAGE_GENERATION_API_KEY:
+        raise ImageGenerationError(ERR_NOT_CONFIGURED, "Image generation credential is not configured.")
+
+    try:
+        response = httpx.post(
+            endpoint,
+            headers={"Authorization": f"Bearer {IMAGE_GENERATION_API_KEY}"},
+            files={"image": (filename, image_bytes, mime_type)},
+            data={"model": IMAGE_EDIT_MODEL, "prompt": prompt},
+            timeout=IMAGE_GENERATION_TIMEOUT_SECONDS,
+        )
+    except httpx.TimeoutException:
+        raise ImageGenerationError(ERR_TIMEOUT, "Image edit timed out.")
+    except httpx.HTTPError:
+        raise ImageGenerationError(ERR_PROVIDER_FAILED, "Image edit service is unavailable.")
+
+    if response.status_code in (401, 403):
+        raise ImageGenerationError(ERR_AUTH_FAILED, "Image edit authentication failed.")
+    if response.status_code >= 400:
+        raise ImageGenerationError(ERR_PROVIDER_FAILED, "Image edit service returned an error.")
+
+    try:
+        data = response.json()
+    except Exception:
+        raise ImageGenerationError(ERR_MALFORMED_RESPONSE, "Image edit response is invalid.")
+    if not isinstance(data, dict):
+        raise ImageGenerationError(ERR_MALFORMED_RESPONSE, "Image edit response is invalid.")
+    return _normalize_response(_strip_sensitive(data), prompt)

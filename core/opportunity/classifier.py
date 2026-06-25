@@ -21,6 +21,10 @@ _THEME_RULES = [
     (["pet", "宠物", "talk", "说话", "voice", "配音"], "pet-talk", "pet-talk-viral", "宠物说话/配音"),
     (["blessing", "祝福", "greeting", "新年", "节日"], "blessing-video", "blessing-video-viral", "祝福视频/贺卡"),
     (["funny", "搞笑", "video", "视频", "clip"], "funny-video", "funny-video-viral", "搞笑短视频"),
+    # 抠图/去背景（image-to-image）：必须排在通用 photo/image 规则之前，
+    # 否则 "background remover" 会被笼统归到 ai-image（文字出图），名实不符。
+    (["background remover", "background removal", "remove background", "背景去除", "去背景", "抠图", "cutout", "cut out", "matting", "remove bg", "transparent background"],
+     "bg-remove", "background-remover", "背景去除/抠图"),
     (["photo", "图片", "image", "art", "绘画", "draw"], "image-tool", "ai-image", "图像处理/生成"),
     (["writing", "写作", "translate", "翻译", "text", "summarize", "摘要"], "text-tool", "ai-tool", "文本/写作类"),
 ]
@@ -47,6 +51,7 @@ _KNOWN_TEMPLATES = {
     "ai-tool", "ai-chat", "ai-image",
     "avatar-viral", "sticker-viral", "pet-talk-viral",
     "funny-video-viral", "blessing-video-viral",
+    "background-remover",
 }
 # 模板 -> 题材标签（尊重上游时回填展示用），与 _THEME_RULES 对齐。
 _TEMPLATE_THEME_LABEL = {
@@ -56,6 +61,7 @@ _TEMPLATE_THEME_LABEL = {
     "pet-talk-viral": ("pet-talk", "宠物说话/配音"),
     "blessing-video-viral": ("blessing-video", "祝福视频/贺卡"),
     "funny-video-viral": ("funny-video", "搞笑短视频"),
+    "background-remover": ("bg-remove", "背景去除/抠图"),
     "ai-chat": ("chat-tool", "聊天/助手"),
     "ai-tool": ("general-tool", "通用 AI 工具"),
 }

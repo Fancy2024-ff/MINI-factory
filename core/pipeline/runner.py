@@ -30,6 +30,16 @@ if sys.platform == "win32":
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# 加载 .env，让无论是直接 CLI 还是被 task_worker 当子进程拉起的 runner，都能读到
+# TELEGRAM_BOT_TOKEN / CLOUDFLARE_API_TOKEN 等凭据（step 14 TG 部署依赖）。
+# 已存在的真实环境变量优先（不覆盖），缺失才从 .env 补。
+try:
+    from dotenv import load_dotenv
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
+except Exception:
+    pass
+
 DATA_DIR = PROJECT_ROOT / "data"
 SAMPLES_DIR = DATA_DIR / "samples"
 REAL_INPUTS_DIR = DATA_DIR / "inputs" / "real"

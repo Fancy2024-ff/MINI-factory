@@ -36,11 +36,20 @@ TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "")
 CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
 CLOUDFLARE_PROJECT_NAME = os.getenv("CLOUDFLARE_PROJECT_NAME", "miniforge-app")
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+# Production branch of the Pages project; deploying to it updates the canonical
+# <project>.pages.dev domain (the one the TG menu button points to).
+CLOUDFLARE_PAGES_BRANCH = os.getenv("CLOUDFLARE_PAGES_BRANCH", "main")
 
-# LLM config for the webapp frontend
+# LLM config for the webapp frontend (legacy text-app template)
 WEBAPP_LLM_BASE_URL = os.getenv("WEBAPP_LLM_BASE_URL", "https://api.deepseek.com")
 WEBAPP_LLM_API_KEY = os.getenv("WEBAPP_LLM_API_KEY", "")
 WEBAPP_LLM_MODEL = os.getenv("WEBAPP_LLM_MODEL", "deepseek-chat")
+
+# Image app: the WebApp calls OUR backend image endpoint (provider key stays on
+# the server, never baked into the public page). Defaults to the public API base.
+WEBAPP_BACKEND_URL = os.getenv("WEBAPP_BACKEND_URL", os.getenv("GENERATED_APP_API_BASE", ""))
+# 部署成出图 WebApp 还是文本 WebApp。默认出图。
+TELEGRAM_WEBAPP_KIND = os.getenv("TELEGRAM_WEBAPP_KIND", "image")
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +113,34 @@ def render_template(app_name: str, features: list[str], description: str) -> str
     return html
 
 
+def render_image_template(app_name: str, features: list[str], description: str) -> str:
+    """Render the image-generation H5 template.
+
+    The WebApp calls our own backend (`WEBAPP_BACKEND_URL` + /api/generation/image),
+    so NO provider key is baked into the public page. Frontend only sends a prompt;
+    failures are retried silently on the client and never shown to the user.
+    """
+    template_path = TEMPLATE_DIR / "image.html"
+    html = template_path.read_text(encoding="utf-8")
+
+    icon = pick_icon(app_name, features)
+    subtitle = (description[:40] if description else "AI 图片生成") or "AI 图片生成"
+    placeholder = "例如：一只戴墨镜的柴犬，赛博朋克风格"
+
+    replacements = {
+        "{{APP_NAME}}": app_name,
+        "{{APP_ICON}}": icon,
+        "{{APP_SUBTITLE}}": subtitle,
+        "{{INPUT_PLACEHOLDER}}": placeholder,
+        "{{API_BASE}}": WEBAPP_BACKEND_URL.rstrip("/"),
+        "{{TEMPLATE_ID}}": "ai-image",
+        "{{STYLE}}": "",
+    }
+    for key, value in replacements.items():
+        html = html.replace(key, value)
+    return html
+
+
 # ---------------------------------------------------------------------------
 # Cloudflare Pages deployment
 # ---------------------------------------------------------------------------
@@ -129,8 +166,14 @@ def deploy_to_cloudflare(html_content: str) -> str:
     Deploy HTML to Cloudflare Pages using wrangler CLI.
     Returns the production URL.
     """
+    import shutil
     import subprocess
     import tempfile
+
+    # Resolve the npx executable. On Windows the launcher is `npx.cmd`, which
+    # subprocess cannot find by the bare name `npx` without shell=True. Fall
+    # back to the plain name so non-Windows platforms are unaffected.
+    npx = shutil.which("npx") or shutil.which("npx.cmd") or "npx"
 
     # Write HTML to a temp directory
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -143,17 +186,23 @@ def deploy_to_cloudflare(html_content: str) -> str:
         if CLOUDFLARE_ACCOUNT_ID:
             env["CLOUDFLARE_ACCOUNT_ID"] = CLOUDFLARE_ACCOUNT_ID
 
-        cmd = ["npx", "wrangler", "pages", "deploy", tmpdir,
+        # Deploy to the project's PRODUCTION branch so the canonical domain
+        # (<project>.pages.dev) is updated. Without --branch, wrangler uses the
+        # current git branch name; any non-production branch lands on a preview
+        # URL and the menu-button domain keeps serving the old content.
+        cmd = [npx, "wrangler", "pages", "deploy", tmpdir,
              "--project-name", CLOUDFLARE_PROJECT_NAME,
+             "--branch", CLOUDFLARE_PAGES_BRANCH,
              "--commit-dirty=true"]
 
         result = subprocess.run(
             cmd,
-            capture_output=True, text=True, env=env, timeout=60,
+            capture_output=True, text=True, env=env, timeout=120,
+            encoding="utf-8", errors="replace",
         )
 
         if result.returncode != 0:
-            raise RuntimeError(f"wrangler deploy failed: {result.stderr}")
+            raise RuntimeError(f"wrangler deploy failed: {result.stderr or result.stdout}")
 
     production_url = f"https://{CLOUDFLARE_PROJECT_NAME}.pages.dev"
     print(f"  [Cloudflare] Production: {production_url}")
@@ -223,14 +272,21 @@ def deploy_telegram(job_id: str, output_dir: Path, app_info: dict, opportunity: 
     """
     print(f"\n  [TG Deploy] Starting automatic deployment...")
 
+    is_image = TELEGRAM_WEBAPP_KIND == "image"
+
     # Validate config
     missing = []
     if not TELEGRAM_BOT_TOKEN:
         missing.append("TELEGRAM_BOT_TOKEN")
     if not CLOUDFLARE_API_TOKEN:
         missing.append("CLOUDFLARE_API_TOKEN")
-    if not WEBAPP_LLM_API_KEY:
-        missing.append("WEBAPP_LLM_API_KEY")
+    if is_image:
+        # Image WebApp calls our backend; needs the public backend URL, not an LLM key.
+        if not WEBAPP_BACKEND_URL:
+            missing.append("WEBAPP_BACKEND_URL")
+    else:
+        if not WEBAPP_LLM_API_KEY:
+            missing.append("WEBAPP_LLM_API_KEY")
 
     if missing:
         return {
@@ -258,8 +314,12 @@ def deploy_telegram(job_id: str, output_dir: Path, app_info: dict, opportunity: 
     description = app_info.get("description_cn", app_info.get("description", ""))
 
     # Step 1: Render template
-    print(f"  [TG Deploy] Rendering template for: {app_name}")
-    html = render_template(app_name, features, description)
+    kind_label = "image" if is_image else "text"
+    print(f"  [TG Deploy] Rendering {kind_label} template for: {app_name}")
+    if is_image:
+        html = render_image_template(app_name, features, description)
+    else:
+        html = render_template(app_name, features, description)
 
     # Step 2: Deploy to Cloudflare
     print(f"  [TG Deploy] Deploying to Cloudflare Pages...")
@@ -326,6 +386,14 @@ def deploy_telegram(job_id: str, output_dir: Path, app_info: dict, opportunity: 
 
 if __name__ == "__main__":
     """Run standalone: python core/publisher/telegram_deploy.py <job_id>"""
+    # On Windows the console defaults to GBK and cannot encode emoji/UTF-8 in
+    # status messages; force stdout/stderr to UTF-8 so prints never crash.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
     from dotenv import load_dotenv
     load_dotenv(PROJECT_ROOT / ".env")
 
@@ -336,9 +404,12 @@ if __name__ == "__main__":
         "CLOUDFLARE_API_TOKEN": os.getenv("CLOUDFLARE_API_TOKEN", ""),
         "CLOUDFLARE_PROJECT_NAME": os.getenv("CLOUDFLARE_PROJECT_NAME", "miniforge-app"),
         "CLOUDFLARE_ACCOUNT_ID": os.getenv("CLOUDFLARE_ACCOUNT_ID", ""),
+        "CLOUDFLARE_PAGES_BRANCH": os.getenv("CLOUDFLARE_PAGES_BRANCH", "main"),
         "WEBAPP_LLM_BASE_URL": os.getenv("WEBAPP_LLM_BASE_URL", "https://api.deepseek.com"),
         "WEBAPP_LLM_API_KEY": os.getenv("WEBAPP_LLM_API_KEY", ""),
         "WEBAPP_LLM_MODEL": os.getenv("WEBAPP_LLM_MODEL", "deepseek-chat"),
+        "WEBAPP_BACKEND_URL": os.getenv("WEBAPP_BACKEND_URL", os.getenv("GENERATED_APP_API_BASE", "")),
+        "TELEGRAM_WEBAPP_KIND": os.getenv("TELEGRAM_WEBAPP_KIND", "image"),
     })
 
     if len(sys.argv) < 2:

@@ -13,7 +13,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Literal, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Depends, Header, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Depends, Header, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field, ConfigDict, model_validator, ValidationError
@@ -1274,6 +1274,77 @@ def generate_image_endpoint(req: ImageGenerationRequest, request: Request):
             "preview_type": "image",
             "title": "AI 图片生成",
             "caption": prompt[:60],
+            "image_url": result.get("image_url"),
+            "image_base64": result.get("image_base64"),
+            "prompt": result.get("prompt"),
+            "provider": result.get("provider"),
+            "created_at": int(_t.time()),
+            "metadata": result.get("metadata", {}),
+        },
+    }
+
+
+MAX_IMAGE_UPLOAD_BYTES = int(os.environ.get("MAX_IMAGE_UPLOAD_BYTES", str(12 * 1024 * 1024)))
+_ALLOWED_IMAGE_MIME = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
+
+
+@app.post("/api/generation/image-edit")
+async def edit_image_endpoint(
+    request: Request,
+    image: UploadFile = File(...),
+    prompt: str = Form(""),
+    task: str = Form("background_remove"),
+):
+    """图像编辑 runtime 接口（public）：接收上传图，做背景去除等 image-to-image。
+
+    HTTP adapter：调 core.integrations.image_generation.edit_image。
+    不透传 provider key / 原始错误。task=background_remove 时用内置去背 prompt。
+    """
+    if _rate_limited(request):
+        return _RATE_LIMITED_RESPONSE
+
+    from core.integrations.image_generation import (
+        ImageGenerationError,
+        ERR_FAILED,
+        edit_image,
+        BG_REMOVE_PROMPT,
+    )
+
+    content_type = (image.content_type or "").lower()
+    if content_type not in _ALLOWED_IMAGE_MIME:
+        return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "仅支持 PNG / JPG / WebP 图片"}}
+
+    data = await image.read()
+    if not data:
+        return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "图片为空"}}
+    if len(data) > MAX_IMAGE_UPLOAD_BYTES:
+        return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "图片过大（上限 12MB）"}}
+
+    edit_prompt = (prompt or "").strip()
+    if task == "background_remove" or not edit_prompt:
+        edit_prompt = BG_REMOVE_PROMPT
+    if len(edit_prompt) > MAX_PROMPT_LEN:
+        return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "指令过长"}}
+
+    try:
+        result = edit_image(
+            data, edit_prompt,
+            filename=image.filename or "image.png",
+            mime_type=content_type,
+        )
+    except ImageGenerationError as e:
+        retryable = e.code in {"IMAGE_GENERATION_TIMEOUT", "IMAGE_GENERATION_PROVIDER_FAILED"}
+        return {"ok": False, "error": {"code": e.code, "message": e.message, "retryable": retryable}}
+    except Exception:
+        return {"ok": False, "error": {"code": ERR_FAILED, "message": "图片处理失败，请稍后重试", "retryable": True}}
+
+    import time as _t
+    return {
+        "ok": True,
+        "result": {
+            "preview_type": "image",
+            "title": "背景去除",
+            "caption": "已移除背景",
             "image_url": result.get("image_url"),
             "image_base64": result.get("image_base64"),
             "prompt": result.get("prompt"),
