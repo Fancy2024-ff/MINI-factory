@@ -1,7 +1,7 @@
 import generated from './features.generated.json'
 
 export type Ability = 'text2img' | 'img2img'
-export type Task = 'generate_image' | 'background_remove'
+export type Task = 'generate_image' | 'background_remove' | 'watermark_remove'
 
 export interface FeatureConfig {
   id: string
@@ -17,7 +17,7 @@ export interface FeatureConfig {
 }
 
 const ABILITY_WHITELIST = new Set<string>(['text2img', 'img2img'])
-const TASK_WHITELIST = new Set<string>(['generate_image', 'background_remove'])
+const TASK_WHITELIST = new Set<string>(['generate_image', 'background_remove', 'watermark_remove'])
 
 export function validateFeature(f: FeatureConfig): { ok: boolean; reason: string } {
   if (!f || !/^[a-z0-9-]+$/.test(f.id || '')) return { ok: false, reason: 'id not url-safe' }

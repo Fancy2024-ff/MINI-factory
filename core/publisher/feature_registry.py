@@ -14,7 +14,7 @@ from pathlib import Path
 from core.opportunity.classifier import template_to_ability_task
 
 ABILITY_WHITELIST = {"text2img", "img2img"}
-TASK_WHITELIST = {"generate_image", "background_remove"}
+TASK_WHITELIST = {"generate_image", "background_remove", "watermark_remove"}
 
 _ICON_BY_ABILITY = {"text2img": "🖼", "img2img": "✂️"}
 

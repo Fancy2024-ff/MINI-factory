@@ -1351,6 +1351,7 @@ async def edit_image_endpoint(
         ERR_FAILED,
         edit_image,
         BG_REMOVE_PROMPT,
+        WATERMARK_REMOVE_PROMPT,
     )
 
     content_type = (image.content_type or "").lower()
@@ -1363,8 +1364,11 @@ async def edit_image_endpoint(
     if len(data) > MAX_IMAGE_UPLOAD_BYTES:
         return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "图片过大（上限 12MB）"}}
 
+    # task 决定内置 prompt：未显式传 prompt 时按 task 选择，名副其实。
     edit_prompt = (prompt or "").strip()
-    if task == "background_remove" or not edit_prompt:
+    if task == "watermark_remove" and not edit_prompt:
+        edit_prompt = WATERMARK_REMOVE_PROMPT
+    elif task == "background_remove" or not edit_prompt:
         edit_prompt = BG_REMOVE_PROMPT
     if len(edit_prompt) > MAX_PROMPT_LEN:
         return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "指令过长"}}

@@ -25,6 +25,9 @@ _THEME_RULES = [
     # 否则 "background remover" 会被笼统归到 ai-image（文字出图），名实不符。
     (["background remover", "background removal", "remove background", "背景去除", "去背景", "抠图", "cutout", "cut out", "matting", "remove bg", "transparent background"],
      "bg-remove", "background-remover", "背景去除/抠图"),
+    # 去水印（image-to-image）：同样必须排在通用 photo/image 之前。
+    (["watermark", "remove watermark", "watermark remover", "去水印", "水印", "去除水印"],
+     "watermark-remove", "watermark-remover", "去水印"),
     (["photo", "图片", "image", "art", "绘画", "draw"], "image-tool", "ai-image", "图像处理/生成"),
     (["writing", "写作", "translate", "翻译", "text", "summarize", "摘要"], "text-tool", "ai-tool", "文本/写作类"),
 ]
@@ -51,7 +54,7 @@ _KNOWN_TEMPLATES = {
     "ai-tool", "ai-chat", "ai-image",
     "avatar-viral", "sticker-viral", "pet-talk-viral",
     "funny-video-viral", "blessing-video-viral",
-    "background-remover",
+    "background-remover", "watermark-remover",
 }
 # 模板 -> 题材标签（尊重上游时回填展示用），与 _THEME_RULES 对齐。
 _TEMPLATE_THEME_LABEL = {
@@ -62,6 +65,7 @@ _TEMPLATE_THEME_LABEL = {
     "blessing-video-viral": ("blessing-video", "祝福视频/贺卡"),
     "funny-video-viral": ("funny-video", "搞笑短视频"),
     "background-remover": ("bg-remove", "背景去除/抠图"),
+    "watermark-remover": ("watermark-remove", "去水印"),
     "ai-chat": ("chat-tool", "聊天/助手"),
     "ai-tool": ("general-tool", "通用 AI 工具"),
 }
@@ -138,6 +142,7 @@ def classify(app: dict, viral: dict | None = None) -> dict:
 _TEMPLATE_ABILITY_TASK = {
     "ai-image": ("text2img", "generate_image"),
     "background-remover": ("img2img", "background_remove"),
+    "watermark-remover": ("img2img", "watermark_remove"),
 }
 
 

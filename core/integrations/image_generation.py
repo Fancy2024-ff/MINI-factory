@@ -284,6 +284,13 @@ BG_REMOVE_PROMPT = (
     "fully intact and unchanged. Replace the background with pure solid white."
 )
 
+# Default instruction for watermark removal; callers may override via prompt.
+WATERMARK_REMOVE_PROMPT = (
+    "Remove all watermarks, logos, and overlaid text from the image. "
+    "Reconstruct the area underneath naturally so it blends seamlessly with "
+    "the surrounding content. Keep the rest of the image fully intact and unchanged."
+)
+
 
 def edit_image(image_bytes: bytes, prompt: str, *, filename: str = "image.png",
                mime_type: str = "image/png") -> dict[str, Any]:
