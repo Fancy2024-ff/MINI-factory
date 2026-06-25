@@ -65,3 +65,45 @@ def test_deploy_skips_when_config_missing(monkeypatch, tmp_path):
     assert result["status"] == "skipped"
     assert result["automated"] is False
     assert "TELEGRAM_BOT_TOKEN" in result["reason"]
+
+
+def test_deploy_appends_to_registry_when_task_valid(tmp_path, monkeypatch):
+    import core.publisher.telegram_deploy as td
+    reg = tmp_path / "features.generated.json"
+    reg.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(td, "GENERATED_REGISTRY", reg)
+    monkeypatch.setattr(td, "build_collection", lambda: None)
+    monkeypatch.setattr(td, "WEB_DIST_DIR", tmp_path)  # 让安全门的 dist 存在检查通过
+    monkeypatch.setattr(td, "deploy_to_cloudflare_dir", lambda *a, **k: "https://x.pages.dev")
+    monkeypatch.setattr(td, "setup_telegram_bot", lambda *a, **k: {"bot_link": "t.me/x", "menu_button_set": True})
+    monkeypatch.setattr(td, "CLOUDFLARE_API_TOKEN", "x")
+    monkeypatch.setattr(td, "TELEGRAM_BOT_TOKEN", "x")
+    monkeypatch.setattr(td, "WEBAPP_BACKEND_URL", "https://x")
+    out = tmp_path / "job"
+    out.mkdir()
+    (out / "candidate.json").write_text('{"name_cn":"表情包"}', encoding="utf-8")
+    (out / "template-selection.json").write_text('{"selected_template":"ai-image"}', encoding="utf-8")
+    res = td.deploy_telegram("job-1", out, {"name_cn": "表情包"}, {"target_platforms": ["telegram"]})
+    import json as _j
+    data = _j.loads(reg.read_text(encoding="utf-8"))
+    assert any(f["title"] == "表情包" for f in data)
+    assert res["status"] in ("deployed", "partial")
+
+
+def test_deploy_pending_when_task_not_whitelisted(tmp_path, monkeypatch):
+    import core.publisher.telegram_deploy as td
+    reg = tmp_path / "features.generated.json"
+    reg.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(td, "GENERATED_REGISTRY", reg)
+    monkeypatch.setattr(td, "CLOUDFLARE_API_TOKEN", "x")
+    monkeypatch.setattr(td, "TELEGRAM_BOT_TOKEN", "x")
+    monkeypatch.setattr(td, "WEBAPP_BACKEND_URL", "https://x")
+    out = tmp_path / "job"
+    out.mkdir()
+    (out / "candidate.json").write_text('{"name_cn":"祝福视频"}', encoding="utf-8")
+    # blessing-video-viral 不在 ability/task 白名单 -> pending
+    (out / "template-selection.json").write_text('{"selected_template":"blessing-video-viral"}', encoding="utf-8")
+    res = td.deploy_telegram("job-2", out, {"name_cn": "祝福视频"}, {"target_platforms": ["telegram"]})
+    assert res["status"] == "pending"
+    import json as _j
+    assert _j.loads(reg.read_text(encoding="utf-8")) == []  # 未写入

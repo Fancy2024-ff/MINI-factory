@@ -28,6 +28,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE_DIR = SCRIPT_DIR / "templates" / "telegram-webapp"
 DATA_DIR = PROJECT_ROOT / "data"
 
+# 合集前端（并入合集部署模式）：把工厂功能 append 进 registry → 构建 → 部署整站 dist。
+WEB_APP_DIR = PROJECT_ROOT / "apps" / "web"
+GENERATED_REGISTRY = WEB_APP_DIR / "src" / "tg" / "registry" / "features.generated.json"
+WEB_DIST_DIR = WEB_APP_DIR / "dist"
+
 # ---------------------------------------------------------------------------
 # Config (from env)
 # ---------------------------------------------------------------------------
@@ -50,6 +55,8 @@ WEBAPP_LLM_MODEL = os.getenv("WEBAPP_LLM_MODEL", "deepseek-chat")
 WEBAPP_BACKEND_URL = os.getenv("WEBAPP_BACKEND_URL", os.getenv("GENERATED_APP_API_BASE", ""))
 # 部署成出图 WebApp 还是文本 WebApp。默认出图。
 TELEGRAM_WEBAPP_KIND = os.getenv("TELEGRAM_WEBAPP_KIND", "image")
+# 合集 TG 入口 URL（菜单按钮指向）。留空则用部署得到的 webapp_url + /tg。
+TELEGRAM_WEBAPP_URL = os.getenv("TELEGRAM_WEBAPP_URL", "")
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +224,52 @@ def deploy_to_cloudflare(html_content: str) -> str:
     return production_url
 
 
+def build_collection() -> None:
+    """构建合集前端（npm run build）。失败抛 RuntimeError。"""
+    import shutil
+    import subprocess
+    npx = shutil.which("npm") or "npm"
+    result = subprocess.run(
+        [npx, "run", "build"],
+        cwd=str(WEB_APP_DIR),
+        capture_output=True, text=True, timeout=300,
+        encoding="utf-8", errors="replace",
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"collection build failed: {result.stderr or result.stdout}")
+
+
+def count_registry_features() -> int:
+    """generated registry 当前条数（部署安全门用）。"""
+    if not GENERATED_REGISTRY.exists():
+        return 0
+    try:
+        return len(json.loads(GENERATED_REGISTRY.read_text(encoding="utf-8") or "[]"))
+    except Exception:
+        return 0
+
+
+def deploy_to_cloudflare_dir(dist_dir: Path) -> str:
+    """部署一个已构建好的目录（合集 dist）到 Cloudflare Pages 生产分支。"""
+    import shutil
+    import subprocess
+    npx = shutil.which("npx") or shutil.which("npx.cmd") or "npx"
+    env = os.environ.copy()
+    env["CLOUDFLARE_API_TOKEN"] = CLOUDFLARE_API_TOKEN
+    if CLOUDFLARE_ACCOUNT_ID:
+        env["CLOUDFLARE_ACCOUNT_ID"] = CLOUDFLARE_ACCOUNT_ID
+    cmd = [npx, "wrangler", "pages", "deploy", str(dist_dir),
+           "--project-name", CLOUDFLARE_PROJECT_NAME,
+           "--branch", CLOUDFLARE_PAGES_BRANCH, "--commit-dirty=true"]
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env,
+                            timeout=180, encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        raise RuntimeError(f"wrangler deploy failed: {result.stderr or result.stdout}")
+    production_url = f"https://{CLOUDFLARE_PROJECT_NAME}.pages.dev"
+    print(f"  [Cloudflare] Production: {production_url}")
+    return production_url
+
+
 def put_cloudflare_secrets() -> None:
     """把 LLM key / base url 写入 Cloudflare Pages 服务端 secret（非交互，stdin 传值）。
 
@@ -294,142 +347,73 @@ def setup_telegram_bot(webapp_url: str, app_name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def deploy_telegram(job_id: str, output_dir: Path, app_info: dict, opportunity: dict) -> dict:
-    """
-    Full automatic Telegram deployment.
+    """把工厂产物作为一条 feature 并入合集并部署整站（不再单页覆盖）。"""
+    print(f"\n  [TG Deploy] 并入合集模式：生成 feature 配置...")
 
-    Args:
-        job_id: Pipeline job ID
-        output_dir: Path to job output directory
-        app_info: Best app candidate dict
-        opportunity: Opportunity analysis dict
-
-    Returns:
-        Deploy status dict
-    """
-    print(f"\n  [TG Deploy] Starting automatic deployment...")
-
-    is_image = TELEGRAM_WEBAPP_KIND == "image"
-
-    # Validate config
+    # 凭据校验：部署整站需要 CF token + bot token；后端公网入口用于 img2img。
     missing = []
     if not TELEGRAM_BOT_TOKEN:
         missing.append("TELEGRAM_BOT_TOKEN")
     if not CLOUDFLARE_API_TOKEN:
         missing.append("CLOUDFLARE_API_TOKEN")
-    if is_image:
-        # Image WebApp calls our backend; needs the public backend URL, not an LLM key.
-        if not WEBAPP_BACKEND_URL:
-            missing.append("WEBAPP_BACKEND_URL")
-    else:
-        if not WEBAPP_LLM_API_KEY:
-            missing.append("WEBAPP_LLM_API_KEY")
-
+    if not WEBAPP_BACKEND_URL:
+        missing.append("WEBAPP_BACKEND_URL")
     if missing:
-        return {
-            "status": "skipped",
-            "reason": f"Missing config: {', '.join(missing)}",
-            "automated": False,
-        }
+        return {"status": "skipped", "reason": f"Missing config: {', '.join(missing)}",
+                "automated": False}
 
-    # Extract app info
-    app_name = app_info.get("name_cn", app_info.get("name", "AI 助手"))
-    features = []
+    from core.publisher.feature_registry import (
+        build_feature_config, validate_feature, append_feature)
 
-    # Try to get features from PRD
-    prd_path = output_dir / "prd.json"
-    if prd_path.exists():
-        try:
-            prd = json.loads(prd_path.read_text(encoding="utf-8"))
-            features = [f.get("name", "") for f in prd.get("core_features", []) if f.get("name")]
-        except Exception:
-            pass
+    sel_path = output_dir / "template-selection.json"
+    selection = json.loads(sel_path.read_text(encoding="utf-8")) if sel_path.exists() else {}
+    feature_key = opportunity.get("feature_key") or app_info.get("feature_key") \
+        or app_info.get("name_cn") or job_id
+    feat = build_feature_config(feature_key, app_info, selection)
 
-    if not features:
-        features = app_info.get("features", ["文本处理"])
+    ok, reason = validate_feature(feat)
+    if not ok:
+        return {"status": "pending", "reason": f"feature 未通过校验，未上线: {reason}",
+                "feature": feat, "automated": True}
 
-    description = app_info.get("description_cn", app_info.get("description", ""))
+    before = count_registry_features()
+    appended = append_feature(GENERATED_REGISTRY, feat)
+    if not appended:
+        print(f"  [TG Deploy] feature 已存在（id={feat['id']}），跳过 append")
 
-    # Step 1: Render template
-    kind_label = "image" if is_image else "text"
-    print(f"  [TG Deploy] Rendering {kind_label} template for: {app_name}")
-    if is_image:
-        html = render_image_template(app_name, features, description)
-    else:
-        html = render_template(app_name, features, description)
-
-    # Step 2: Deploy to Cloudflare
-    print(f"  [TG Deploy] Deploying to Cloudflare Pages...")
+    print(f"  [TG Deploy] 构建合集...")
     try:
-        webapp_url = deploy_to_cloudflare(html)
+        build_collection()
     except Exception as e:
-        return {
-            "status": "failed",
-            "stage": "cloudflare_deploy",
-            "error": str(e),
-            "automated": True,
-        }
+        return {"status": "failed", "stage": "build", "error": str(e), "automated": True}
 
-    # Step 2b: 写入服务端 secret（仅文本 WebApp 需要）。
-    # 文本 App 经 functions/api/chat.js 代理调 LLM，key 存 Cloudflare 服务端 secret，
-    # 不进下发的 HTML。出图 App 调我们自己的后端，无需在此设置 LLM secret。
-    if not is_image:
-        print(f"  [TG Deploy] Setting Cloudflare server-side secrets...")
-        try:
-            put_cloudflare_secrets()
-        except Exception as e:
-            return {
-                "status": "partial",
-                "stage": "cloudflare_secrets",
-                "error": str(e),
-                "webapp_url": webapp_url,
-                "automated": True,
-            }
+    after = count_registry_features()
+    if not WEB_DIST_DIR.exists() or after < before:
+        return {"status": "failed", "stage": "smoke",
+                "error": f"安全门失败 dist={WEB_DIST_DIR.exists()} before={before} after={after}",
+                "automated": True}
 
-    # Step 3: Configure Telegram Bot
-    print(f"  [TG Deploy] Configuring Telegram Bot...")
+    print(f"  [TG Deploy] 部署合集整站到 Cloudflare...")
     try:
-        tg_result = setup_telegram_bot(webapp_url, app_name)
+        webapp_url = deploy_to_cloudflare_dir(WEB_DIST_DIR)
     except Exception as e:
-        return {
-            "status": "partial",
-            "stage": "telegram_config",
-            "error": str(e),
-            "webapp_url": webapp_url,
-            "automated": True,
-        }
+        return {"status": "failed", "stage": "cloudflare_deploy", "error": str(e),
+                "automated": True}
 
-    # Step 4: Save deploy status
-    deploy_status = {
-        "status": "deployed",
-        "automated": True,
-        "platform": "telegram",
-        "job_id": job_id,
-        "app_name": app_name,
-        "webapp_url": webapp_url,
-        "bot_link": tg_result["bot_link"],
-        "bot_username": TELEGRAM_BOT_USERNAME,
-        "deployed_at": datetime.now().isoformat(),
-        "cloudflare_project": CLOUDFLARE_PROJECT_NAME,
-        "llm_provider": WEBAPP_LLM_BASE_URL,
-        "llm_model": WEBAPP_LLM_MODEL,
-    }
+    try:
+        tg_result = setup_telegram_bot(TELEGRAM_WEBAPP_URL or (webapp_url.rstrip("/") + "/tg"),
+                                       app_info.get("name_cn", "合集"))
+    except Exception as e:
+        return {"status": "partial", "stage": "telegram_config", "error": str(e),
+                "webapp_url": webapp_url, "automated": True}
 
-    # Update platform-auth/telegram.json
-    auth_file = DATA_DIR / "platform-auth" / "telegram.json"
-    auth_file.parent.mkdir(parents=True, exist_ok=True)
-    auth_file.write_text(json.dumps({
-        "bot_token": TELEGRAM_BOT_TOKEN,
-        "webapp_url": webapp_url,
-        "bot_username": TELEGRAM_BOT_USERNAME,
-        "deploy_target": "cloudflare",
-        "deploy_url": webapp_url,
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    print(f"  [TG Deploy] ✅ Deployed successfully!")
-    print(f"  [TG Deploy] URL: {webapp_url}")
-    print(f"  [TG Deploy] Bot: {tg_result['bot_link']}")
-
-    return deploy_status
+    result = {"status": "deployed", "automated": True, "platform": "telegram",
+              "job_id": job_id, "feature_id": feat["id"], "feature_title": feat["title"],
+              "webapp_url": webapp_url, "bot_link": tg_result.get("bot_link", ""),
+              "deployed_at": datetime.now().isoformat()}
+    (output_dir / "telegram-deploy.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -462,6 +446,7 @@ if __name__ == "__main__":
         "WEBAPP_LLM_MODEL": os.getenv("WEBAPP_LLM_MODEL", "deepseek-chat"),
         "WEBAPP_BACKEND_URL": os.getenv("WEBAPP_BACKEND_URL", os.getenv("GENERATED_APP_API_BASE", "")),
         "TELEGRAM_WEBAPP_KIND": os.getenv("TELEGRAM_WEBAPP_KIND", "image"),
+        "TELEGRAM_WEBAPP_URL": os.getenv("TELEGRAM_WEBAPP_URL", ""),
     })
 
     if len(sys.argv) < 2:
