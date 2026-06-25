@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { TaskItem, TaskSummary } from '../types/job'
+import { computed, ref } from 'vue'
+import type { TaskItem, TaskSummary, TaskHealth } from '../types/job'
 
 const props = defineProps<{
   summary: TaskSummary | null
   tasks: TaskItem[]
   busyTaskId: string
+  health?: TaskHealth | null
 }>()
 
 const emit = defineEmits<{
@@ -30,6 +31,12 @@ const KIND_LABEL: Record<string, string> = {
   'opportunity.crawl': '抓取机会',
 }
 
+// 当前筛选状态：'all' 看全部，否则只看该状态。点概览卡片切换（本地过滤，即时）。
+const activeFilter = ref<string>('all')
+function setFilter(key: string) {
+  activeFilter.value = key
+}
+
 const statusTiles = computed(() =>
   STATUS_ORDER.map((s) => ({
     ...s,
@@ -38,6 +45,14 @@ const statusTiles = computed(() =>
 )
 
 const total = computed(() => props.summary?.total ?? 0)
+
+// 按当前筛选过滤任务列表；'all' 直接返回全部。
+const visibleTasks = computed(() =>
+  activeFilter.value === 'all'
+    ? props.tasks
+    : props.tasks.filter((t) => t.status === activeFilter.value),
+)
+
 
 function statusLabel(status: string) {
   return STATUS_ORDER.find((s) => s.key === status)?.label || status
@@ -85,24 +100,37 @@ function canRetry(t: TaskItem) {
     </div>
 
     <div class="summary-row">
-      <div class="summary-tile summary-tile--total">
+      <button
+        type="button"
+        class="summary-tile summary-tile--total"
+        :class="{ 'summary-tile--selected': activeFilter === 'all' }"
+        @click="setFilter('all')"
+      >
         <span>全部任务</span>
         <strong>{{ total }}</strong>
-      </div>
-      <div
+      </button>
+      <button
         v-for="tile in statusTiles"
         :key="tile.key"
+        type="button"
         class="summary-tile"
-        :class="`summary-tile--${tile.key}`"
+        :class="[`summary-tile--${tile.key}`, { 'summary-tile--selected': activeFilter === tile.key }]"
+        @click="setFilter(tile.key)"
       >
         <span>{{ tile.label }}</span>
         <strong>{{ tile.count }}</strong>
-      </div>
+      </button>
     </div>
 
-    <div v-if="tasks.length" class="task-list" data-testid="task-list">
+    <div v-if="props.health" class="queue-health" data-testid="queue-health">
+      <span>活跃 worker：{{ props.health.active_worker_count }}</span>
+      <span>最老等待：{{ props.health.oldest_pending_seconds }}s</span>
+      <span>执行中：{{ props.health.running_count }}</span>
+    </div>
+
+    <div v-if="visibleTasks.length" class="task-list" data-testid="task-list">
       <div
-        v-for="t in tasks"
+        v-for="t in visibleTasks"
         :key="t.id"
         class="task-row"
         :class="{ 'task-row--active': t.status === 'running' }"
@@ -145,6 +173,11 @@ function canRetry(t: TaskItem) {
       </div>
     </div>
 
+    <div v-else-if="tasks.length" class="empty-state" data-testid="task-empty-filtered">
+      <strong>没有{{ statusLabel(activeFilter) }}的任务</strong>
+      <span>当前筛选下没有任务。点「全部任务」查看所有任务。</span>
+    </div>
+
     <div v-else class="empty-state" data-testid="task-empty">
       <strong>还没有任务</strong>
       <span>在「机会工厂」里对某条机会点「立即生成」，就会在这里出现一个任务。</span>
@@ -170,7 +203,17 @@ function canRetry(t: TaskItem) {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  text-align: left;
+  border: 2px solid transparent;
+  cursor: pointer;
+  font: inherit;
+  transition: transform 0.15s var(--ease-apple), box-shadow 0.15s var(--ease-apple), border-color 0.15s;
 }
+.summary-tile:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.08); }
+.summary-tile:active { transform: translateY(0); }
+/* 选中态：深色描边凸显当前筛选；total 用浅色描边以在黑底上可见。 */
+.summary-tile--selected { border-color: #1d1d1f; }
+.summary-tile--total.summary-tile--selected { border-color: rgba(255,255,255,0.55); }
 .summary-tile span { color: #6e6e73; font-size: 12px; font-weight: 600; }
 .summary-tile strong { font-size: 30px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; }
 .summary-tile--total { background: #1d1d1f; }
@@ -180,6 +223,16 @@ function canRetry(t: TaskItem) {
 .summary-tile--succeeded strong { color: #1a7f37; }
 .summary-tile--failed strong { color: #c41e16; }
 .summary-tile--cancelled strong { color: #8a8a8e; }
+
+.queue-health {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 13px;
+  color: #6b6b70;
+}
+.queue-health span { white-space: nowrap; }
 
 .task-list {
   margin-top: 22px;

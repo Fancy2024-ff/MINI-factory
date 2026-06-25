@@ -1,4 +1,4 @@
-import type { JobSummary, JobDetail, OpportunitySummary, PipelineMode, TaskItem, TaskSummary, QueueActionResult } from '../types/job'
+import type { JobSummary, JobDetail, OpportunitySummary, PipelineMode, TaskItem, TaskSummary, TaskHealth, QueueActionResult } from '../types/job'
 
 const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 const WS_BASE = import.meta.env.VITE_WS_BASE_URL || 'ws://localhost:8000'
@@ -46,6 +46,28 @@ async function post<T = any>(path: string, body?: any): Promise<T> {
   return res.json()
 }
 
+// 下载 zip 产物（小程序源码 / 构建产物 / 整包）。用带认证头的 fetch 取 blob 再触发
+// 浏览器保存——直接用 <a href> 无法携带 X-API-Key，开了鉴权就会 401。
+async function downloadZip(path: string, fallbackName: string): Promise<void> {
+  const headers: Record<string, string> = {}
+  if (API_KEY) headers['X-API-Key'] = API_KEY
+  const res = await fetch(`${BASE}${path}`, { headers })
+  if (!res.ok) throw await parseError(res)
+  // 优先用后端 Content-Disposition 的文件名。
+  const disp = res.headers.get('Content-Disposition') || ''
+  const m = disp.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i)
+  const filename = m ? decodeURIComponent(m[1]) : fallbackName
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 export interface PipelineStartResult {
   accepted: boolean
   job_id: string
@@ -65,6 +87,12 @@ export const api = {
   getJobs: () => get<{ jobs: JobSummary[] }>('/api/jobs'),
   getLatestJob: () => get<JobDetail>('/api/jobs/latest'),
   getJob: (id: string) => get<JobDetail>(`/api/jobs/${encodeURIComponent(id)}`),
+  // 下载 job 产物 zip。target: all（整包）/ miniapp（小程序源码）/ dist（构建产物）。
+  downloadJobZip: (id: string, target: 'all' | 'miniapp' | 'dist' = 'all') =>
+    downloadZip(
+      `/api/jobs/${encodeURIComponent(id)}/download?target=${target}`,
+      `miniapp-factory-${id}-${target}.zip`,
+    ),
   startPipeline: (mode: PipelineMode = 'auto', options: PipelineStartOptions = {}) =>
     post<PipelineStartResult>('/api/pipeline/start', { mode, ...options }),
   stopPipeline: () => post('/api/pipeline/stop'),
@@ -89,6 +117,7 @@ export const api = {
     return get<{ tasks: TaskItem[]; count: number }>(`/api/tasks${suffix}`)
   },
   getTaskSummary: () => get<TaskSummary>('/api/tasks/summary'),
+  getTaskHealth: () => get<TaskHealth>('/api/tasks/health'),
   getTask: (id: string) => get<TaskItem>(`/api/tasks/${encodeURIComponent(id)}`),
   getTasksByQueue: (queueId: string) =>
     get<{ queue_id: string; tasks: TaskItem[]; count: number }>(

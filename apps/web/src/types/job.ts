@@ -111,6 +111,18 @@ export interface TaskSummary {
   by_kind: Record<string, number>
 }
 
+export interface TaskHealth {
+  total: number
+  pending: number
+  running: number
+  succeeded: number
+  failed: number
+  cancelled: number
+  oldest_pending_seconds: number
+  running_count: number
+  active_worker_count: number
+}
+
 // generate_now 现在走 task queue：返回任务句柄（含去重复用标记）。
 export interface QueueActionResult {
   ok: boolean

@@ -10,6 +10,7 @@ import type {
   PipelineStep,
   TaskItem,
   TaskSummary,
+  TaskHealth,
 } from './types/job'
 import { api, connectPipelineWS, type WSHandle } from './services/api'
 import AppleTopNav from './components/AppleTopNav.vue'
@@ -45,6 +46,7 @@ const selectedStepId = ref('')
 // 生产任务系统视图状态（只读 + cancel/retry；底层逻辑在后端，不在前端）。
 const tasks = ref<TaskItem[]>([])
 const taskSummary = ref<TaskSummary | null>(null)
+const taskHealth = ref<TaskHealth | null>(null)
 const busyTaskId = ref('')
 const launchOptions = ref<PipelineLaunchOptions>({
   regions: 'CN,US',
@@ -156,12 +158,14 @@ async function refreshOpportunityData() {
 
 async function loadTasks() {
   try {
-    const [list, summary] = await Promise.all([
+    const [list, summary, healthData] = await Promise.all([
       api.getTasks({ limit: 50 }),
       api.getTaskSummary(),
+      api.getTaskHealth(),
     ])
     tasks.value = list.tasks || []
     taskSummary.value = summary
+    taskHealth.value = healthData
   } catch (e: any) {
     // 任务库为空或后端未起也不该污染主错误条，仅在确无其它数据时提示。
     if (!opportunitySummary.value && !currentJob.value) {
@@ -458,6 +462,7 @@ onBeforeUnmount(() => {
           v-if="activeTab === 'tasks'"
           :summary="taskSummary"
           :tasks="tasks"
+          :health="taskHealth"
           :busy-task-id="busyTaskId"
           @refresh="loadTasks"
           @cancel="cancelTask"
