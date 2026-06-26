@@ -59,6 +59,7 @@ export interface PipelineLaunchOptions {
   platforms: string
   limit: number
   max_generate: number
+  force_refresh?: boolean
 }
 
 export interface OpportunitySummary {

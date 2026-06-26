@@ -46,6 +46,23 @@ async function post<T = any>(path: string, body?: any): Promise<T> {
   return res.json()
 }
 
+// multipart 上传（不设 Content-Type，交给浏览器带 boundary）。
+async function postForm<T = any>(path: string, form: FormData): Promise<T> {
+  const headers: Record<string, string> = {}
+  if (API_KEY) headers['X-API-Key'] = API_KEY
+  const res = await fetch(`${BASE}${path}`, { method: 'POST', headers, body: form })
+  if (!res.ok) throw await parseError(res)
+  return res.json()
+}
+
+async function del<T = any>(path: string): Promise<T> {
+  const headers: Record<string, string> = {}
+  if (API_KEY) headers['X-API-Key'] = API_KEY
+  const res = await fetch(`${BASE}${path}`, { method: 'DELETE', headers })
+  if (!res.ok) throw await parseError(res)
+  return res.json()
+}
+
 // 下载 zip 产物（小程序源码 / 构建产物 / 整包）。用带认证头的 fetch 取 blob 再触发
 // 浏览器保存——直接用 <a href> 无法携带 X-API-Key，开了鉴权就会 401。
 async function downloadZip(path: string, fallbackName: string): Promise<void> {
@@ -81,6 +98,7 @@ export interface PipelineStartOptions {
   platforms?: string
   limit?: number
   max_generate?: number
+  force_refresh?: boolean
 }
 
 export const api = {
@@ -101,6 +119,13 @@ export const api = {
   getOpportunityQueue: () => get<{ items: any[]; total: number }>('/api/opportunities/queue'),
   getOpportunityCandidates: () => get<{ items: any[]; total: number }>('/api/opportunities/candidates'),
   getOpportunityFeatures: () => get<{ items: any[]; total: number }>('/api/opportunities/features'),
+  // processed-apps 记录：查看哪些 feature 被永久从候选隐藏 + 重置（破坏性，后端自动备份）。
+  getProcessedApps: () => get<{ count: number; features: any[] }>('/api/opportunities/processed'),
+  resetProcessedApps: (body: { all?: boolean; feature_key?: string } = {}) =>
+    post<{ ok: boolean; removed: number; remaining: number; backup: string | null }>(
+      '/api/opportunities/processed/reset',
+      body,
+    ),
   queueAction: (action: 'prioritize' | 'skip' | 'retry' | 'generate_now', queueId: string, payload: any = {}) =>
     post<QueueActionResult>(
       '/api/opportunities/queue/action',
@@ -132,6 +157,25 @@ export const api = {
   getPlatforms: () => get<{ platforms: any[]; total: number }>('/api/platforms'),
   getPlatformAuth: () => get<{ platforms: any[] }>('/api/platform-auth/status'),
   uploadWechat: () => post<{ upload_passed: boolean; reason: string }>('/api/platforms/wechat/upload'),
+  // 提交中心：已上架功能页（含预览 URL + 当前广告配置）。
+  getDeployedApps: () => get<{ items: any[]; total: number }>('/api/submit/deployed-apps'),
+  // 提交中心：更新某功能页广告闸门（上架/下架 + 时长）。
+  saveAdConfig: (route: string, adEnabled?: boolean, adSeconds?: number) =>
+    post<{ ok: boolean; route: string; ad: { ad_enabled: boolean; ad_seconds: number } }>(
+      '/api/submit/ad-config',
+      { route, ad_enabled: adEnabled, ad_seconds: adSeconds },
+    ),
+  // 提交中心：上传/删除某功能页的广告视频。
+  uploadAdVideo: (route: string, file: File) => {
+    const form = new FormData()
+    form.append('route', route)
+    form.append('video', file)
+    return postForm<{ ok: boolean; route: string; video_url: string }>('/api/submit/ad-video', form)
+  },
+  deleteAdVideo: (route: string) =>
+    del<{ ok: boolean; route: string; video_url: string }>(
+      `/api/submit/ad-video?route=${encodeURIComponent(route)}`,
+    ),
 }
 
 export interface WSCallbacks {

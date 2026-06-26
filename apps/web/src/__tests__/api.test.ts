@@ -54,6 +54,46 @@ describe('api.startPipeline', () => {
       max_generate: 1,
     })
   })
+
+  it('passes force_refresh through to the start payload', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ accepted: true, job_id: 'job-2', mode: 'auto' }),
+    } as any)
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.startPipeline('auto', {
+      regions: 'CN', platforms: 'app_store', limit: 5, max_generate: 1, force_refresh: true,
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(JSON.parse(init.body).force_refresh).toBe(true)
+  })
+})
+
+describe('api.processedApps', () => {
+  it('GET hits the processed endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ count: 0, features: [] }),
+    } as any)
+    vi.stubGlobal('fetch', fetchMock)
+    await api.getProcessedApps()
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toContain('/api/opportunities/processed')
+    expect(init?.method ?? 'GET').toBe('GET')
+  })
+
+  it('reset POSTs the body to the reset endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ ok: true, removed: 2, remaining: 0, backup: 'b.json' }),
+    } as any)
+    vi.stubGlobal('fetch', fetchMock)
+    await api.resetProcessedApps({ feature_key: 'k1' })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toContain('/api/opportunities/processed/reset')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ feature_key: 'k1' })
+  })
 })
 
 describe('connectPipelineWS', () => {

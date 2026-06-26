@@ -29,7 +29,16 @@ const emit = defineEmits<{
   'open-view': [view: OpportunityView]
   'update-launch-options': [next: PipelineLaunchOptions]
   'queue-action': [payload: { action: 'prioritize' | 'skip' | 'retry' | 'generate_now'; queueId: string }]
+  'reset-processed': []
 }>()
+
+function confirmResetProcessed() {
+  // 破坏性操作：清空已生产记录会让历史 app 重新进入候选、可能重复生产，必须二次确认。
+  const ok = window.confirm(
+    '确定重置「已生产记录」吗？\n\n已生产过的 app 会重新进入候选列表，可能被再次生产。后端会在重置前自动备份。',
+  )
+  if (ok) emit('reset-processed')
+}
 
 function runQueueAction(action: 'prioritize' | 'skip' | 'retry' | 'generate_now', item: any) {
   const queueId = item?.queue_id
@@ -197,6 +206,26 @@ function openView(view: OpportunityView) {
       <button class="secondary" :disabled="running" @click="emit('start', 'crawl')">只抓取机会</button>
       <button class="secondary" :disabled="running" @click="emit('start', 'queue')">消费队列</button>
       <button class="ghost" @click="emit('refresh')">刷新数据</button>
+      <button
+        class="chip force-refresh-chip"
+        type="button"
+        :class="{ 'chip--active': launchOptions.force_refresh }"
+        :aria-pressed="launchOptions.force_refresh ? 'true' : 'false'"
+        data-testid="force-refresh-toggle"
+        title="忽略已生产去重，强制重新抓取/生产已处理过的 app"
+        @click="updateOptions({ force_refresh: !launchOptions.force_refresh })"
+      >
+        强制刷新
+      </button>
+      <button
+        class="ghost danger-ghost"
+        type="button"
+        data-testid="reset-processed-btn"
+        title="重置已生产记录，让历史 app 重新进入候选（破坏性，后端自动备份）"
+        @click="confirmResetProcessed"
+      >
+        重置已生产记录
+      </button>
     </div>
     <div class="hero-stop">
       <button class="stop-btn" :disabled="!running" @click="emit('stop')">STOP</button>

@@ -251,6 +251,17 @@ class QueueActionRequest(BaseModel):
     payload: dict = Field(default_factory=dict)
 
 
+class ProcessedResetRequest(BaseModel):
+    """重置 processed-apps 记录（破坏性，重置前自动备份）。
+
+    - 全部重置：body `{}` 或 `{"all": true}` → features 清空。
+    - 单条重置：body `{"feature_key": "xxx"}` → 仅删该条。
+    """
+
+    all: bool = False
+    feature_key: Optional[str] = None
+
+
 class AdConfigRequest(BaseModel):
     """提交中心：更新某功能页（route）的广告闸门配置。至少传一个可改字段。"""
 
@@ -853,6 +864,72 @@ async def opportunity_queue_action(req: QueueActionRequest):
         "task_id": res["task_id"], "kind": res["kind"], "status": res["status"],
         "job_id": res.get("job_id"), "mode": "queue",
     }
+
+
+@app.get("/api/opportunities/processed", dependencies=[Depends(verify_api_key)])
+def get_processed_apps():
+    """查看 processed-apps 记录摘要：哪些 feature 被永久从候选中隐藏。
+
+    候选列表会按 produced 记录的 parent_app_key 做差集过滤，导致生产过的 app
+    永久消失。此接口让运营看清当前被隐藏了哪些。
+    """
+    data = _read_opportunity_json("processed-apps.json", {"features": {}})
+    features_map = data.get("features", {}) if isinstance(data, dict) else {}
+    features = []
+    for feature_key, rec in features_map.items():
+        rec = rec if isinstance(rec, dict) else {}
+        features.append({
+            "feature_key": feature_key,
+            "parent_app_key": rec.get("parent_app_key"),
+            "status": rec.get("status"),
+            "job_id": rec.get("job_id"),
+        })
+    return {"count": len(features), "features": features}
+
+
+@app.post("/api/opportunities/processed/reset", dependencies=[Depends(verify_api_key)])
+def reset_processed_apps(req: ProcessedResetRequest):
+    """重置 processed-apps 记录（破坏性：已生产 app 会重新进入候选、可能重复生产）。
+
+    重置前先把当前文件备份到同目录 processed-apps.backup-<时间戳>.json。
+    - 单条：body {"feature_key": "xxx"} → 仅删该条。
+    - 全部：body {} 或 {"all": true} → features 清空。
+    """
+    from datetime import datetime, timezone
+
+    from core.opportunity.processed_apps import load_processed, save_processed
+
+    path = OPPORTUNITY_DIR / "processed-apps.json"
+    data = load_processed(path)
+    features_map = data.setdefault("features", {})
+    before = len(features_map)
+
+    # 备份当前文件（仅当存在）。备份失败不应静默吞掉破坏性操作 → 抛错。
+    backup_name = None
+    if path.exists():
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        backup_name = f"processed-apps.backup-{ts}.json"
+        try:
+            (OPPORTUNITY_DIR / backup_name).write_text(
+                path.read_text(encoding="utf-8-sig"), encoding="utf-8"
+            )
+        except Exception as e:
+            raise HTTPException(500, f"备份失败，已中止重置：{e}")
+
+    if req.feature_key:
+        # 单条重置
+        if req.feature_key not in features_map:
+            raise HTTPException(404, f"feature_key not found: {req.feature_key}")
+        features_map.pop(req.feature_key, None)
+        removed = 1
+    else:
+        # 全部重置（body {} 或 {"all": true} 均落到这里）
+        removed = before
+        data["features"] = {}
+
+    save_processed(path, data)
+    remaining = len(data.get("features", {}))
+    return {"ok": True, "removed": removed, "remaining": remaining, "backup": backup_name}
 
 
 # ---------------------------------------------------------------------------

@@ -53,6 +53,7 @@ const launchOptions = ref<PipelineLaunchOptions>({
   platforms: 'app_store',
   limit: 50,
   max_generate: 5,
+  force_refresh: false,
 })
 
 function setMode(value: PipelineMode) {
@@ -215,6 +216,19 @@ async function handleQueueAction(p: { action: 'prioritize' | 'skip' | 'retry' | 
       await loadTasks()
       startTaskPolling()
     }
+    await refreshOpportunityData()
+  } catch (e: any) {
+    error.value = e.message
+  }
+}
+
+// 重置已生产记录（破坏性，后端会先备份）。成功后刷新机会数据，让历史 app 重新进入候选。
+async function handleResetProcessed() {
+  error.value = ''
+  notice.value = ''
+  try {
+    const res = await api.resetProcessedApps({})
+    notice.value = `已重置已生产记录：清除 ${res.removed} 条，剩余 ${res.remaining} 条。${res.backup ? `已备份至 ${res.backup}。` : ''}`
     await refreshOpportunityData()
   } catch (e: any) {
     error.value = e.message
@@ -449,6 +463,7 @@ onBeforeUnmount(() => {
           @open-view="setOpportunityView"
           @update-launch-options="updateLaunchOptions"
           @queue-action="handleQueueAction"
+          @reset-processed="handleResetProcessed"
         />
         <OpportunityExplorer
           v-if="activeTab === 'opportunities'"
