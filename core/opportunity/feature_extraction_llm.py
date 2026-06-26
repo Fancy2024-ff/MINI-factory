@@ -144,11 +144,11 @@ def _call_llm(app: dict) -> "LLMFeatureList":
     for _ in range(_LLM_MAX_RETRIES + 1):
         try:
             resp = llm.invoke(prompt)
-            text = resp.content if isinstance(resp.content, str) else str(resp.content)
-            text = text.strip()
-            if text.startswith("```"):
-                text = text.split("```")[1].lstrip("json").strip()
-            data = json.loads(text)
+            raw = resp.content if isinstance(resp.content, str) else str(resp.content)
+            m = re.search(r"\{.*\}", raw, re.S)   # 容忍 ```json 包裹/前后散文，提取首个 JSON 对象
+            if not m:
+                raise ValueError("LLM 未返回可解析 JSON")
+            data = json.loads(m.group(0))
             return LLMFeatureList(**data)  # pydantic 严格校验，越界 ability_type 在此抛错
         except Exception as e:  # noqa: BLE001 — 统一捕获，交由门面整体回退
             last_err = e
@@ -163,7 +163,7 @@ def extract_features_llm(app: dict, top_n: int = _DEFAULT_TOP_N) -> list[dict]:
     失败抛异常，由 extract_all 门面整体回退规则版。
     """
     parent_key = app.get("canonical_key", "")
-    if parent_key in _cache:
+    if parent_key and parent_key in _cache:
         return [dict(s) for s in _cache[parent_key]]
 
     parsed = _call_llm(app)
@@ -173,10 +173,9 @@ def extract_features_llm(app: dict, top_n: int = _DEFAULT_TOP_N) -> list[dict]:
     # Top-N：只对 buildable=true 排序截断，超出名额的降 production_recommended(不丢弃)
     buildable = [s for s in specs if s["buildable"]]
     buildable.sort(key=lambda s: s["miniapp_fit_score"], reverse=True)
-    keep = {id(s) for s in buildable[:top_n]}
-    for s in buildable:
-        if id(s) not in keep:
-            s["production_recommended"] = False
+    for s in buildable[top_n:]:   # 超出 Top-N 名额的 buildable 项降级(仍保留在返回列表)
+        s["production_recommended"] = False
 
-    _cache[parent_key] = [dict(s) for s in specs]
+    if parent_key:
+        _cache[parent_key] = [dict(s) for s in specs]
     return specs

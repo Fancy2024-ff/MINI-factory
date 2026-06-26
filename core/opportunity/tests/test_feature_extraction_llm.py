@@ -171,3 +171,44 @@ def test_call_llm_sets_request_timeout(monkeypatch):
     monkeypatch.setattr(fx, "get_llm", _fake_get_llm)
     fx._call_llm({"name": "X", "description": "d"})
     assert captured["timeout"] == 30.0
+
+
+def test_call_llm_parses_json_with_code_fence(monkeypatch):
+    """LLM 返回 ```json 包裹/带前后散文，仍能提取 JSON。"""
+    class _R:
+        content = '好的，结果如下：\n```json\n{"features":[{"feature_name":"G","feature_name_cn":"生成","description":"d","ability_type":"image-gen","input_modality":["text"],"output_modality":"image","complexity":"easy","extraction_confidence":0.9}]}\n```'
+    class _LLM:
+        def model_copy(self, update): return self
+        def invoke(self, prompt): return _R()
+    monkeypatch.setattr(fx, "get_llm", lambda *a, **k: _LLM())
+    out = fx._call_llm({"name": "X", "description": "d"})
+    assert out.features[0].ability_type == "image-gen"
+
+
+def test_call_llm_retries_then_succeeds(monkeypatch):
+    """前一次抛错、第二次成功 → 不抛，返回结果(验证重试)。"""
+    state = {"n": 0}
+    good = '{"features":[{"feature_name":"G","feature_name_cn":"生成","description":"d","ability_type":"image-gen","input_modality":["text"],"output_modality":"image","complexity":"easy","extraction_confidence":0.9}]}'
+    class _R:
+        def __init__(self, c): self.content = c
+    class _LLM:
+        def model_copy(self, update): return self
+        def invoke(self, prompt):
+            state["n"] += 1
+            if state["n"] == 1:
+                raise RuntimeError("transient")
+            return _R(good)
+    monkeypatch.setattr(fx, "get_llm", lambda *a, **k: _LLM())
+    out = fx._call_llm({"name": "X", "description": "d"})
+    assert out.features[0].feature_name == "G"
+    assert state["n"] == 2
+
+
+def test_call_llm_all_attempts_fail_raises(monkeypatch):
+    """3 次尝试全失败 → 抛 RuntimeError。"""
+    class _LLM:
+        def model_copy(self, update): return self
+        def invoke(self, prompt): raise RuntimeError("down")
+    monkeypatch.setattr(fx, "get_llm", lambda *a, **k: _LLM())
+    with pytest.raises(RuntimeError):
+        fx._call_llm({"name": "X", "description": "d"})
