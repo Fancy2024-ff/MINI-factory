@@ -136,7 +136,9 @@ def _build_prompt(app: dict) -> str:
 
 def _call_llm(app: dict) -> "LLMFeatureList":
     """调 LLM 并解析为 LLMFeatureList。超时+重试；任何失败抛异常(门面层回退)。"""
-    llm = get_llm(max_tokens=4096).with_config({"timeout": _LLM_TIMEOUT_SECONDS})
+    # default_request_timeout(别名 timeout)是 ChatAnthropic 的真实超时字段；
+    # with_config({"timeout":...}) 不是 RunnableConfig 合法字段会被静默忽略，故用 model_copy 注入。
+    llm = get_llm(max_tokens=4096).model_copy(update={"default_request_timeout": float(_LLM_TIMEOUT_SECONDS)})
     prompt = _build_prompt(app)
     last_err: Exception | None = None
     for _ in range(_LLM_MAX_RETRIES + 1):

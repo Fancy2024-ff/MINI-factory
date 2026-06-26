@@ -148,3 +148,26 @@ def test_extract_features_llm_caches_by_canonical_key(monkeypatch):
     fx.extract_features_llm(_capcut())
     fx.extract_features_llm(_capcut())
     assert calls["n"] == 1
+
+
+def test_call_llm_sets_request_timeout(monkeypatch):
+    """_call_llm 必须把 30s 真正注入 ChatAnthropic.default_request_timeout(防 with_config 静默失效回归)。"""
+    captured = {}
+    class _FakeLLM:
+        default_request_timeout = None
+        def invoke(self, prompt):
+            captured["timeout"] = self.default_request_timeout
+            class _R:
+                content = '{"features":[{"feature_name":"G","feature_name_cn":"生成","description":"d","ability_type":"image-gen","input_modality":["text"],"output_modality":"image","complexity":"easy","extraction_confidence":0.9}]}'
+            return _R()
+    fake = _FakeLLM()
+    # get_llm().model_copy(update=...) 链路：让 get_llm 返回的对象 model_copy 后带上 timeout
+    def _fake_get_llm(*a, **k):
+        class _Base:
+            def model_copy(self, update):
+                fake.default_request_timeout = update["default_request_timeout"]
+                return fake
+        return _Base()
+    monkeypatch.setattr(fx, "get_llm", _fake_get_llm)
+    fx._call_llm({"name": "X", "description": "d"})
+    assert captured["timeout"] == 30.0
