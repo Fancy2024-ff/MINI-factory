@@ -10,11 +10,13 @@ FeatureSpec(Top-N 截断只在入队 buildable 项时施加，不截断复盘清
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from core.integrations.llm import get_llm
 from core.opportunity.ability_map import ABILITY_TYPES, resolve
 
 _Modality = Literal["text", "image", "video", "audio", "multi-field"]
@@ -100,3 +102,79 @@ def build_feature_spec(f: "LLMFeature", parent_key: str, parent_name: str) -> di
         "reason": [f"从 {parent_name} 拆出的功能：{f.feature_name_cn}"],
         "data_source": "llm",
     }
+
+
+_LLM_TIMEOUT_SECONDS = 30
+_LLM_MAX_RETRIES = 2
+_DEFAULT_TOP_N = 5
+
+_cache: dict[str, list[dict]] = {}
+
+
+def _clear_cache() -> None:
+    _cache.clear()
+
+
+def _build_prompt(app: dict) -> str:
+    """注入 App 真实信息，要求只输出 ABILITY_TYPES 内的 ability_type。"""
+    enum = ", ".join(sorted(ABILITY_TYPES))
+    feats = "; ".join(app.get("features", []) or [])
+    return (
+        "你是小程序工厂的功能拆分器。给定一个 App 的真实信息，拆出它包含的、可独立做成"
+        "轻量小程序的功能。只输出 JSON，格式 {\"features\": [...]}，每个 feature 含字段："
+        "feature_name, feature_name_cn, description, ability_type, input_modality(数组), "
+        "output_modality, complexity, extraction_confidence(0~1)。\n"
+        f"ability_type 只能从这个封闭集合里选(不得自创)：{enum}\n"
+        "处理已上传图/视频/音频的语义用 image-edit/video-edit/audio-edit，"
+        "凭文字生成新内容用 image-gen/text-gen 等。贴合该 App 真实功能，不要套预设模板。\n\n"
+        f"App 名称：{app.get('name', '')}\n"
+        f"分类：{app.get('category', '') or ' '.join(app.get('categories', []) or [])}\n"
+        f"描述：{app.get('description', '')}\n"
+        f"功能点：{feats}\n"
+    )
+
+
+def _call_llm(app: dict) -> "LLMFeatureList":
+    """调 LLM 并解析为 LLMFeatureList。超时+重试；任何失败抛异常(门面层回退)。"""
+    llm = get_llm(max_tokens=4096).with_config({"timeout": _LLM_TIMEOUT_SECONDS})
+    prompt = _build_prompt(app)
+    last_err: Exception | None = None
+    for _ in range(_LLM_MAX_RETRIES + 1):
+        try:
+            resp = llm.invoke(prompt)
+            text = resp.content if isinstance(resp.content, str) else str(resp.content)
+            text = text.strip()
+            if text.startswith("```"):
+                text = text.split("```")[1].lstrip("json").strip()
+            data = json.loads(text)
+            return LLMFeatureList(**data)  # pydantic 严格校验，越界 ability_type 在此抛错
+        except Exception as e:  # noqa: BLE001 — 统一捕获，交由门面整体回退
+            last_err = e
+    raise RuntimeError(f"LLM 拆分失败: {last_err}")
+
+
+def extract_features_llm(app: dict, top_n: int = _DEFAULT_TOP_N) -> list[dict]:
+    """对单个 App 用 LLM 拆出全量 FeatureSpec。
+
+    Top-N 只约束入队的 buildable 项(按 fit 降序取 top_n，其余 buildable 降级
+    production_recommended=False 但仍保留)；buildable=false 全量进复盘清单不截断。
+    失败抛异常，由 extract_all 门面整体回退规则版。
+    """
+    parent_key = app.get("canonical_key", "")
+    if parent_key in _cache:
+        return [dict(s) for s in _cache[parent_key]]
+
+    parsed = _call_llm(app)
+    parent_name = app.get("name", "")
+    specs = [build_feature_spec(f, parent_key, parent_name) for f in parsed.features]
+
+    # Top-N：只对 buildable=true 排序截断，超出名额的降 production_recommended(不丢弃)
+    buildable = [s for s in specs if s["buildable"]]
+    buildable.sort(key=lambda s: s["miniapp_fit_score"], reverse=True)
+    keep = {id(s) for s in buildable[:top_n]}
+    for s in buildable:
+        if id(s) not in keep:
+            s["production_recommended"] = False
+
+    _cache[parent_key] = [dict(s) for s in specs]
+    return specs

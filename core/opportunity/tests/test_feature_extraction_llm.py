@@ -8,6 +8,14 @@ from pydantic import ValidationError
 from core.opportunity import feature_extraction_llm as fx
 
 
+@pytest.fixture(autouse=True)
+def _isolate_llm_cache():
+    """每个用例前后清空模块级缓存，避免同 canonical_key 跨用例污染。"""
+    fx._clear_cache()
+    yield
+    fx._clear_cache()
+
+
 def test_llm_feature_schema_accepts_valid():
     f = fx.LLMFeature(
         feature_name="Background Remover", feature_name_cn="背景去除",
@@ -87,3 +95,56 @@ def test_build_feature_spec_unbuildable_no_template():
     assert spec["selected_template"] == ""
     assert spec["production_recommended"] is False
     assert spec["unsupported_reasons"]
+
+
+def _capcut():
+    return {"canonical_key": "app_store:123", "name": "CapCut",
+            "description": "Video editor with background remover, AI avatar, auto captions for long video."}
+
+
+def test_extract_features_llm_top_n_only_limits_buildable(monkeypatch):
+    """Top-N 只截断入队 buildable 项；buildable=false 全量进复盘清单。"""
+    # 造 6 个 buildable + 2 个 unbuildable
+    feats = []
+    for i in range(6):
+        feats.append(fx.LLMFeature(
+            feature_name=f"Gen {i}", feature_name_cn=f"生成{i}", description="d",
+            ability_type="image-gen", input_modality=["text"], output_modality="image",
+            complexity="easy", extraction_confidence=0.9))
+    for i in range(2):
+        feats.append(fx.LLMFeature(
+            feature_name=f"Edit {i}", feature_name_cn=f"剪辑{i}", description="d",
+            ability_type="video-edit", input_modality=["video"], output_modality="video",
+            complexity="hard", extraction_confidence=0.85))
+    monkeypatch.setattr(fx, "_call_llm", lambda app: fx.LLMFeatureList(features=feats))
+
+    specs = fx.extract_features_llm(_capcut(), top_n=5)
+    buildable_in_queue = [s for s in specs if s["production_recommended"]]
+    unbuildable = [s for s in specs if not s["buildable"]]
+    assert len(buildable_in_queue) == 5          # buildable 截到 5
+    assert len(unbuildable) == 2                 # unbuildable 全量保留(不被 Top-N 截)
+
+
+def test_extract_features_llm_raises_on_llm_failure(monkeypatch):
+    """LLM 调用抛错时 extract_features_llm 向上抛(门面层据此整体回退规则版)。"""
+    def _boom(app):
+        raise RuntimeError("llm down")
+    monkeypatch.setattr(fx, "_call_llm", _boom)
+    with pytest.raises(RuntimeError):
+        fx.extract_features_llm(_capcut())
+
+
+def test_extract_features_llm_caches_by_canonical_key(monkeypatch):
+    """同 canonical_key 第二次不再调 LLM(缓存)。"""
+    fx._clear_cache()
+    calls = {"n": 0}
+    def _once(app):
+        calls["n"] += 1
+        return fx.LLMFeatureList(features=[fx.LLMFeature(
+            feature_name="G", feature_name_cn="生成", description="d",
+            ability_type="image-gen", input_modality=["text"], output_modality="image",
+            complexity="easy", extraction_confidence=0.9)])
+    monkeypatch.setattr(fx, "_call_llm", _once)
+    fx.extract_features_llm(_capcut())
+    fx.extract_features_llm(_capcut())
+    assert calls["n"] == 1
