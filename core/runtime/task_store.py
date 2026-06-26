@@ -63,6 +63,12 @@ CREATE TABLE IF NOT EXISTS queue_maintenance (
     last_run_at TEXT,
     runner      TEXT
 );
+
+CREATE TABLE IF NOT EXISTS workers (
+    worker_id   TEXT PRIMARY KEY,
+    last_seen   TEXT NOT NULL,
+    started_at  TEXT NOT NULL
+);
 """
 
 # queue_id / job_id 是后加的列；旧库需 ALTER 补列（sqlite 无 IF NOT EXISTS for column）。
@@ -266,6 +272,40 @@ class TaskStore:
             raise
         finally:
             self._close(conn)
+
+    def worker_heartbeat(self, worker_id: str, now: str | None = None) -> None:
+        """worker 心跳：upsert 自己的 last_seen。无论有无任务都调，证明进程活着。"""
+        now = now or tm.now_iso()
+        conn = self._conn()
+        try:
+            conn.execute(
+                """
+                INSERT INTO workers (worker_id, last_seen, started_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(worker_id) DO UPDATE SET last_seen = excluded.last_seen
+                """,
+                (worker_id, now, now),
+            )
+        finally:
+            self._close(conn)
+
+    def list_active_workers(self, timeout_seconds: int, now: str | None = None) -> list[dict]:
+        """last_seen 在 now-timeout 之内的 worker（视为存活）。"""
+        now = now or tm.now_iso()
+        threshold = _add_seconds(now, -timeout_seconds)
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT worker_id, last_seen, started_at FROM workers WHERE last_seen > ?",
+                (threshold,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            self._close(conn)
+
+    def count_active_workers(self, timeout_seconds: int, now: str | None = None) -> int:
+        """存活 worker 数（last_seen > now-timeout）。"""
+        return len(self.list_active_workers(timeout_seconds, now=now))
 
     def claim_next_task(self, worker_id: str, lock_seconds: int | None = None) -> dict | None:
         """原子领取下一个可执行任务。无可领取任务时返回 None。

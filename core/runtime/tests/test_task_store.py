@@ -414,3 +414,60 @@ def test_maintenance_lock_resumes_after_acquirer_crash(store):
     # 超过 interval 后：维护自动恢复，w2 抢到，继续回收（不会因 w1 崩溃永久卡死）
     later = _add_seconds(now, 61)
     assert store.try_acquire_maintenance("stale_recovery", 60, "w2", now=later) is True
+
+
+# --- 告警 A2: workers 心跳表 ---
+
+def test_worker_heartbeat_upsert(store):
+    store.worker_heartbeat("w1")
+    rows = store.list_active_workers(180)
+    assert len(rows) == 1 and rows[0]["worker_id"] == "w1"
+    # 再次心跳：仍是一行（upsert，不新增）
+    store.worker_heartbeat("w1")
+    assert len(store.list_active_workers(180)) == 1
+
+
+def test_count_active_workers_timeout_boundary(store):
+    from core.runtime.task_store import _add_seconds
+    now = now_iso()
+    store.worker_heartbeat("w1", now=_add_seconds(now, -200))  # 200s 前，超 180 超时
+    store.worker_heartbeat("w2", now=_add_seconds(now, -10))   # 10s 前，活
+    assert store.count_active_workers(180, now=now) == 1       # 只 w2 算活
+
+
+def test_count_active_workers_idle_still_alive(store):
+    """队列无任何任务时，worker 心跳仍使其被计为 active（心跳与任务解耦，空闲不误报）。"""
+    store.worker_heartbeat("w1")
+    store.worker_heartbeat("w2")
+    # 没有 enqueue 任何任务
+    assert store.count_active_workers(180) == 2
+
+
+def test_count_active_workers_concurrent_read_write(tmp_path):
+    """worker 写心跳 + 并发读 workers 表，不 database-locked。"""
+    import threading
+    store = TaskStore(tmp_path / "tasks.sqlite3")
+    errors = []
+
+    def beat(wid):
+        try:
+            for _ in range(20):
+                store.worker_heartbeat(wid)
+        except Exception as e:
+            errors.append(e)
+
+    def read():
+        try:
+            for _ in range(20):
+                store.count_active_workers(180)
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=beat, args=("w1",)),
+               threading.Thread(target=beat, args=("w2",)),
+               threading.Thread(target=read)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []  # 无 database is locked
