@@ -46,9 +46,13 @@ class LLMFeatureList(BaseModel):
 
 
 # fit/viral 基线：按 complexity 给保守默认(LLM 不打分，避免幻觉数字)。
+# 产品策略值(设计 §3.2/§4.2)，调参在此一处改。
 _FIT_BY_COMPLEXITY = {"easy": 86, "medium": 78, "hard": 60}
 _VIRAL_BY_COMPLEXITY = {"easy": 75, "medium": 70, "hard": 60}
-_FIT_THRESHOLD = 65  # production_recommended 的 fit 门槛
+_FIT_THRESHOLD = 65  # production_recommended 的 fit 门槛(产品策略值 §3.2/§4.2)
+_FIT_UNBUILDABLE = 35  # buildable=false：低于门槛，确保被闸门 A(ranking) 挡住，不进生产队列
+_FIT_DEFAULT = 70  # complexity 越界时的兜底 fit
+_VIRAL_DEFAULT = 65  # complexity 越界时的兜底 viral
 
 
 def _slug(s: str) -> str:
@@ -70,8 +74,8 @@ def _stable_feature_key(parent_key: str, feature_name: str) -> str:
 def build_feature_spec(f: "LLMFeature", parent_key: str, parent_name: str) -> dict:
     """把校验过的 LLMFeature + ability_map 落地信息合成一条完整 FeatureSpec。"""
     land = resolve(f.ability_type)  # 越界已在 schema 拦截，这里安全
-    fit = _FIT_BY_COMPLEXITY.get(f.complexity, 70) if land["buildable"] else 35
-    viral = _VIRAL_BY_COMPLEXITY.get(f.complexity, 65)
+    fit = _FIT_BY_COMPLEXITY.get(f.complexity, _FIT_DEFAULT) if land["buildable"] else _FIT_UNBUILDABLE
+    viral = _VIRAL_BY_COMPLEXITY.get(f.complexity, _VIRAL_DEFAULT)
     production_recommended = bool(land["buildable"]) and fit >= _FIT_THRESHOLD
     return {
         "feature_key": _stable_feature_key(parent_key, f.feature_name),
