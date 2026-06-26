@@ -15,6 +15,8 @@ watermark_remove 两个具体 task，通用图生图无对应后端，故 builda
 
 from __future__ import annotations
 
+import copy
+
 # ability_type -> 落地信息。buildable=true 的 selected_template 必须 ∈ _KNOWN_TEMPLATES，
 # (ability, task) 必须与 classifier._TEMPLATE_ABILITY_TASK 一致(test_ability_map 强校验)。
 ABILITY_MAP: dict[str, dict] = {
@@ -78,5 +80,5 @@ ABILITY_TYPES = frozenset(ABILITY_MAP.keys())
 
 
 def resolve(ability_type: str) -> dict:
-    """返回 ability_type 的落地信息副本。越界抛 KeyError(供上游触发 fallback)。"""
-    return dict(ABILITY_MAP[ability_type])
+    """返回 ability_type 的落地信息深拷贝。越界抛 KeyError(供上游触发 fallback)。"""
+    return copy.deepcopy(ABILITY_MAP[ability_type])

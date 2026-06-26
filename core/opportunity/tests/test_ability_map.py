@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from core.opportunity import ability_map as am
-from core.opportunity.classifier import _KNOWN_TEMPLATES, _TEMPLATE_ABILITY_TASK
+from core.opportunity.classifier import _KNOWN_TEMPLATES, template_to_ability_task
 from core.publisher.feature_registry import TASK_WHITELIST
 
 
@@ -15,10 +15,10 @@ def test_buildable_templates_in_known_templates():
 
 
 def test_ability_task_consistent_with_classifier():
-    """buildable 项的 (ability, task) 与 classifier._TEMPLATE_ABILITY_TASK 一致。"""
+    """buildable 项的 (ability, task) 与 classifier.template_to_ability_task 一致。"""
     for at, m in am.ABILITY_MAP.items():
         if m["buildable"]:
-            ab, tk = _TEMPLATE_ABILITY_TASK.get(m["selected_template"], ("text2img", "pending"))
+            ab, tk = template_to_ability_task(m["selected_template"])
             assert (m["ability"], m["task"]) == (ab, tk), f"{at} ability/task 不一致"
 
 
