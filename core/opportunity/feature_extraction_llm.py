@@ -40,4 +40,4 @@ class LLMFeature(BaseModel):
 
 
 class LLMFeatureList(BaseModel):
-    features: list[LLMFeature]
+    features: list[LLMFeature] = Field(min_length=1)  # 空列表视为抽取失败，交门面层回退规则版
