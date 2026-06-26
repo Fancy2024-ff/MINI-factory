@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { sliceGrid, downloadImage } from '../tg/download'
+import { sliceGrid, downloadImage, useDownloadGate } from '../tg/download'
 
 vi.mock('../tg/tgApi', () => ({
   sendToChat: vi.fn(),
@@ -115,5 +115,104 @@ describe('downloadImage 在 Telegram 内对 base64 走「发送到聊天」', ()
     expect(clickSpy).toHaveBeenCalled()  // 兜底走了 anchor
     expect(r).toBe('downloaded')
     clickSpy.mockRestore()
+  })
+})
+
+describe('downloadImage 普通浏览器（非 Telegram）', () => {
+  const origUA = navigator.userAgent
+
+  afterEach(() => {
+    delete (window as any).Telegram
+    Object.defineProperty(navigator, 'userAgent', { value: origUA, configurable: true })
+    Object.defineProperty(navigator, 'maxTouchPoints', { value: 0, configurable: true })
+    vi.restoreAllMocks()
+  })
+
+  it('iOS Safari + base64：新标签打开（让用户长按存相册），不假装已下载', async () => {
+    delete (window as any).Telegram
+    Object.defineProperty(navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+      configurable: true,
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true, blob: async () => new Blob(['x'], { type: 'image/png' }),
+    } as any))
+    ;(URL as any).createObjectURL = vi.fn(() => 'blob:fake')
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue({} as any)
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    const r = await downloadImage('data:image/png;base64,QUJD', 'a.png')
+
+    expect(r).toBe('opened')
+    expect(openSpy).toHaveBeenCalledWith('blob:fake', '_blank')
+    expect(clickSpy).not.toHaveBeenCalled()  // iOS 不走注定失败的 <a download>
+  })
+
+  it('桌面浏览器 + base64：先转 blob URL 再 <a download>', async () => {
+    delete (window as any).Telegram
+    Object.defineProperty(navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) Chrome/120',
+      configurable: true,
+    })
+    Object.defineProperty(navigator, 'maxTouchPoints', { value: 0, configurable: true })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true, blob: async () => new Blob(['x'], { type: 'image/png' }),
+    } as any))
+    ;(URL as any).createObjectURL = vi.fn(() => 'blob:fake')
+    ;(URL as any).revokeObjectURL = vi.fn()
+    const anchors: HTMLAnchorElement[] = []
+    const orig = document.createElement.bind(document)
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = orig(tag) as any
+      if (tag === 'a') { el.click = () => {}; anchors.push(el) }
+      return el
+    })
+
+    const r = await downloadImage('data:image/png;base64,QUJD', 'a.png')
+
+    expect(r).toBe('downloaded')
+    expect(anchors[0].href).toContain('blob:')   // 用的是 blob URL 不是 data URI
+    expect(anchors[0].download).toBe('a.png')
+  })
+})
+
+describe('useDownloadGate 广告开关/时长（运行时配置）', () => {
+  it('默认启用：requestDownload 弹广告闸门，不立即下载', () => {
+    const gate = useDownloadGate()
+    let downloaded = false
+    gate.requestDownload(() => { downloaded = true })
+    expect(gate.adVisible.value).toBe(true)
+    expect(downloaded).toBe(false)
+  })
+
+  it('configure({enabled:false})：下架广告，下载直接执行不弹闸门', () => {
+    const gate = useDownloadGate()
+    gate.configure({ enabled: false })
+    let downloaded = false
+    gate.requestDownload(() => { downloaded = true })
+    expect(gate.adVisible.value).toBe(false)
+    expect(downloaded).toBe(true)
+  })
+
+  it('configure({seconds:0})：时长 0 等同直接放行', () => {
+    const gate = useDownloadGate()
+    gate.configure({ seconds: 0 })
+    let downloaded = false
+    gate.requestDownload(() => { downloaded = true })
+    expect(gate.adVisible.value).toBe(false)
+    expect(downloaded).toBe(true)
+  })
+
+  it('configure 自定义时长：闸门倒计时用新秒数', () => {
+    const gate = useDownloadGate()
+    gate.configure({ seconds: 15 })
+    gate.requestDownload(() => {})
+    expect(gate.adRemain.value).toBe(15)
+  })
+
+  it('configure({videoUrl}) 暴露视频地址供遮罩播放', () => {
+    const gate = useDownloadGate()
+    gate.configure({ videoUrl: 'https://api/x/ad.mp4' })
+    expect(gate.videoUrl.value).toBe('https://api/x/ad.mp4')
   })
 })

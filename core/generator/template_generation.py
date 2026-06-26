@@ -95,22 +95,39 @@ _STICKER_MOOD = {
 
 
 def build_sticker_prompt(inp: dict[str, Any]) -> str:
-    """把表情主题 + 情绪合成「一组表情包贴纸」出图 prompt。
+    """把表情主题 + 情绪 + 单个表情动作合成「单张表情贴纸」出图 prompt。
 
-    方向：贴纸 / 表情包风格、白底、卡通、成套同款角色；
-    一张图里多个表情格（sticker sheet），适合做群聊表情。
+    方向：单个角色、单一表情、纯白背景、居中、无边框无文字。
+    一次只出一个表情（不再出网格大图再切），保证每张干净无错位。
+    expression（可选）：指定这一张的具体表情动作，做整套时逐张不同。
     """
     theme = (inp.get("prompt") or inp.get("theme") or "").strip()
     mood = (inp.get("mood") or "").strip()
+    expression = (inp.get("expression") or "").strip()
     parts = [
-        "cute sticker pack sheet",
-        "multiple chibi expressions of the same character in a grid",
-        "flat cartoon style, bold outline, white background",
+        "a single cute chibi sticker of one character",
+        expression,
         theme,
         _STICKER_MOOD.get(mood, mood),
-        "die-cut sticker look, vivid, clean, no text",
+        "flat cartoon style, bold clean outline, die-cut sticker",
+        "centered single subject, plain solid white background",
+        "no grid, no panels, no frame, no border, no text, only one sticker",
     ]
     return ", ".join(p for p in parts if p)
+
+
+# 整套表情包的默认表情动作（做 4 张时逐张取用，保证每张不同且都干净）。
+STICKER_EXPRESSIONS = [
+    "happy smiling expression",
+    "angry grumpy expression",
+    "crying sad expression",
+    "love heart eyes expression",
+    "laughing joyful expression",
+    "surprised shocked expression",
+    "sleepy tired expression",
+    "cool confident expression",
+    "thinking curious expression",
+]
 
 
 def _sticker_caption(inp: dict[str, Any]) -> str:

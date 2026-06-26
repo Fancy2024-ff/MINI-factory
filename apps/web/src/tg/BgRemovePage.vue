@@ -48,13 +48,13 @@
       <div v-if="toast" class="toast">{{ toast }}</div>
     </section>
 
-    <AdGateOverlay :visible="adVisible" :remain="adRemain" @claim="claim" />
+    <AdGateOverlay :visible="adVisible" :remain="adRemain" :video-url="adVideoUrl" @claim="claim" />
   </div>
 </template>
 <!-- SCRIPT_PLACEHOLDER -->
 <script setup lang="ts">
-import { ref } from 'vue'
-import { editImage, toDisplayImage, runUntilImage, sendToChat } from './tgApi'
+import { ref, onMounted } from 'vue'
+import { editImage, toDisplayImage, runUntilImage, sendToChat, fetchAdConfig } from './tgApi'
 import { haptic, canSendToChat } from './telegram'
 import { useDownloadGate, downloadImage } from './download'
 import AdGateOverlay from './AdGateOverlay.vue'
@@ -121,7 +121,8 @@ function backToForm() { phase.value = 'form'; display.value = null }
 function goHome() { emit('navigate', '/tg') }
 
 // 下载前看广告解锁，解锁后同会话内复用。
-const { adVisible, adRemain, requestDownload, claim } = useDownloadGate()
+const { adVisible, adRemain, requestDownload, claim, configure, videoUrl: adVideoUrl } = useDownloadGate()
+onMounted(async () => { configure(await fetchAdConfig('/tg/bg-remove')) })
 
 function handleDownload() {
   if (!display.value) { showToast('还没有可下载的图片'); return }

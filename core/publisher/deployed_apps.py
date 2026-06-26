@@ -12,12 +12,13 @@ import json
 from pathlib import Path
 
 # 内置功能页（写死在 TG 站 TgHome/route）。route 即天然 key。
+# platform 标识用于在提交中心按平台归类（当前合集站只在 telegram）。
 BUILTIN_FEATURES = [
-    {"route": "/tg/ai-image", "title": "AI 图片生成", "icon": "🖼", "source": "builtin"},
-    {"route": "/tg/avatar", "title": "AI 头像", "icon": "🧑‍🎨", "source": "builtin"},
-    {"route": "/tg/sticker", "title": "表情包工厂", "icon": "😄", "source": "builtin"},
-    {"route": "/tg/pet-talk", "title": "宠物说话", "icon": "🐾", "source": "builtin"},
-    {"route": "/tg/bg-remove", "title": "背景去除", "icon": "✂️", "source": "builtin"},
+    {"route": "/tg/ai-image", "title": "AI 图片生成", "icon": "🖼", "source": "builtin", "platform": "telegram"},
+    {"route": "/tg/avatar", "title": "AI 头像", "icon": "🧑‍🎨", "source": "builtin", "platform": "telegram"},
+    {"route": "/tg/sticker", "title": "表情包工厂", "icon": "😄", "source": "builtin", "platform": "telegram"},
+    {"route": "/tg/pet-talk", "title": "宠物说话", "icon": "🐾", "source": "builtin", "platform": "telegram"},
+    {"route": "/tg/bg-remove", "title": "背景去除", "icon": "✂️", "source": "builtin", "platform": "telegram"},
 ]
 
 
@@ -58,6 +59,7 @@ def _load_generated_features(registry_path: Path) -> list[dict]:
             "title": f.get("title") or fid,
             "icon": f.get("icon") or "✨",
             "source": "generated",
+            "platform": "telegram",
         })
     return out
 

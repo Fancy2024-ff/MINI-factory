@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any
 
 # 硬编码兜底：配置文件/默认项都缺失时用它，保证永远有可用值。
-HARD_DEFAULT = {"ad_enabled": True, "ad_seconds": 30}
+# video_url 为空 → 前端走纯倒计时黑屏；非空 → 播该视频作为广告。
+HARD_DEFAULT = {"ad_enabled": True, "ad_seconds": 30, "video_url": ""}
 MIN_SECONDS = 0
 MAX_SECONDS = 120
 
@@ -47,11 +48,16 @@ def resolve_ad(config: dict, route: str) -> dict:
     return {
         "ad_enabled": bool(merged["ad_enabled"]),
         "ad_seconds": _clamp_seconds(merged["ad_seconds"]),
+        "video_url": str(merged.get("video_url") or ""),
     }
 
 
-def set_ad(config: dict, route: str, *, enabled: Any = None, seconds: Any = None) -> dict:
-    """更新单个 route 的广告配置（只改传入的字段）。返回更新后的整份 config。"""
+def set_ad(config: dict, route: str, *, enabled: Any = None, seconds: Any = None,
+           video_url: Any = None) -> dict:
+    """更新单个 route 的广告配置（只改传入的字段）。返回更新后的整份 config。
+
+    video_url: None 不改；传字符串则设置（传 "" 可清除已配的视频）。
+    """
     if not isinstance(config, dict):
         config = {}
     rec = dict(config.get(route) or {})
@@ -59,8 +65,17 @@ def set_ad(config: dict, route: str, *, enabled: Any = None, seconds: Any = None
         rec["ad_enabled"] = bool(enabled)
     if seconds is not None:
         rec["ad_seconds"] = _clamp_seconds(seconds)
+    if video_url is not None:
+        rec["video_url"] = str(video_url)
     config[route] = rec
     return config
+
+
+def route_to_slug(route: str) -> str:
+    """把 route 转成安全的文件名 slug：/tg/avatar → tg-avatar，/tg/gen/x → tg-gen-x。"""
+    import re
+    s = (route or "").strip("/").replace("/", "-")
+    return re.sub(r"[^A-Za-z0-9_-]", "", s) or "default"
 
 
 def save_ad_config(path: Path, config: dict) -> None:
@@ -78,6 +93,8 @@ def _clean(rec: Any) -> dict:
         out["ad_enabled"] = rec["ad_enabled"]
     if "ad_seconds" in rec:
         out["ad_seconds"] = rec["ad_seconds"]
+    if "video_url" in rec:
+        out["video_url"] = rec["video_url"]
     return out
 
 

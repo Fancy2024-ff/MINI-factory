@@ -20,6 +20,8 @@ export interface TemplateGenerationInput {
   style?: string
   mood?: string
   scene?: string
+  // 表情包多张时逐张指定不同表情动作（happy/angry/...），保证每张各异。
+  expression?: string
   aspect_ratio?: AspectRatio
 }
 

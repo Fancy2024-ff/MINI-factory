@@ -9,6 +9,18 @@ import StickerPage from '../tg/StickerPage.vue'
 import PetTalkPage from '../tg/PetTalkPage.vue'
 import BgRemovePage from '../tg/BgRemovePage.vue'
 
+// 各 TG 页 onMounted 会拉广告配置（/api/tg/ad-config）。测试里把该 URL 的 fetch
+// 路由到一个固定默认配置，其余 URL（生成接口）交给 gen 回调，避免广告配置请求
+// 误吃掉生成接口的 mockResolvedValueOnce 序列。
+function adAwareFetch(genResponder: (url: string) => any) {
+  return (url: string) => {
+    if (typeof url === 'string' && url.includes('/api/tg/ad-config')) {
+      return Promise.resolve({ ok: true, json: async () => ({ ok: true, route: '', ad: { ad_enabled: true, ad_seconds: 30 } }) } as any)
+    }
+    return Promise.resolve(genResponder(url as string))
+  }
+}
+
 beforeEach(() => {
   // 默认无 Telegram WebApp 对象（普通浏览器场景）
   delete (window as any).Telegram
@@ -130,7 +142,7 @@ describe('AiImagePage', () => {
           result: { preview_type: 'image', image_base64: 'QUJD', prompt: 'cat', title: 'AI 图片生成' },
         }),
       } as any)
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', adAwareFetch(() => fetchMock()))
     vi.useFakeTimers()
 
     const w = mount(AiImagePage)
@@ -193,7 +205,7 @@ describe('AiImagePage', () => {
           result: { preview_type: 'image', image_base64: 'QUJD', prompt: 'cat', title: 'AI 图片生成' },
         }),
       } as any)
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', adAwareFetch(() => fetchMock()))
     vi.useFakeTimers()
 
     const w = mount(AiImagePage)
@@ -291,14 +303,14 @@ describe('StickerPage', () => {
     expect(w.exists()).toBe(true)
   })
 
-  it('shows the sticker image after a successful generation', async () => {
+  it('shows the sticker image after a successful generation (default 1 张)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
         ok: true,
         template_id: 'sticker-viral',
         preview_type: 'stickerPack',
-        result: { image_base64: 'QUJD', prompt: '打工人', title: '表情包已生成' },
+        result: { image_base64: 'QUJD', prompt: '打工人', title: '表情已生成' },
       }),
     } as any))
 
@@ -308,56 +320,42 @@ describe('StickerPage', () => {
     await new Promise((r) => setTimeout(r, 0))
     await nextTick()
 
-    const img = w.find('.result-img')
-    expect(img.exists()).toBe(true)
-    expect(img.attributes('src')).toBe('data:image/jpeg;base64,QUJD')
+    // 默认 1 张：结果区出现单张 sticker。
+    const imgs = w.findAll('.sticker-item img')
+    expect(imgs.length).toBe(1)
+    expect(imgs[0].attributes('src')).toBe('data:image/jpeg;base64,QUJD')
   })
 
-  it('slices the sheet into a clickable 9-cell grid and a cell click opens the ad gate', async () => {
-    // 桩 Image（立即 onload）+ canvas（getContext/toDataURL），让 sliceGrid 切出 9 张。
-    class FakeImage {
-      crossOrigin = ''
-      naturalWidth = 300
-      naturalHeight = 300
-      onload: (() => void) | null = null
-      onerror: (() => void) | null = null
-      set src(_v: string) { setTimeout(() => this.onload?.(), 0) }
-    }
-    vi.stubGlobal('Image', FakeImage as any)
-    const origCreate = document.createElement.bind(document)
-    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
-      if (tag === 'canvas') {
-        return { width: 0, height: 0,
-          getContext: () => ({ drawImage: () => {} }),
-          toDataURL: () => 'data:image/png;base64,CELL' } as any
-      }
-      return origCreate(tag)
-    })
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+  it('选 4 张：独立出图 4 次，结果区显示 4 张，点单张弹下载闸门', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
         ok: true, template_id: 'sticker-viral', preview_type: 'stickerPack',
-        result: { image_base64: 'QUJD', prompt: '打工人', title: '表情包已生成' },
+        result: { image_base64: 'QUJD', prompt: '打工人', title: '表情已生成' },
       }),
-    } as any))
+    } as any)
+    vi.stubGlobal('fetch', fetchMock)
 
     const w = mount(StickerPage)
     await w.find('.prompt-input').setValue('打工人')
+    // 选「4 张」数量 chip
+    const fourChip = w.findAll('.chip').find((c: any) => c.text().trim() === '4 张')!
+    await fourChip.trigger('click')
     await w.find('.generate-btn').trigger('click')
-    await new Promise((r) => setTimeout(r, 0)) // 生成完成
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 0)) // sliceGrid 完成
-    await nextTick()
+    // 等 4 次独立出图依次完成
+    for (let i = 0; i < 6; i++) { await new Promise((r) => setTimeout(r, 0)); await nextTick() }
 
-    const cellItems = w.findAll('.cell-item')
-    expect(cellItems.length).toBe(9)
-    // 有「全部下载」按钮
+    const items = w.findAll('.sticker-item')
+    expect(items.length).toBe(4)
+    // 调了 4 次生成接口
+    const genCalls = fetchMock.mock.calls.filter(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes('/api/generation/template'),
+    )
+    expect(genCalls.length).toBe(4)
     expect(w.text()).toContain('全部下载')
-    // 点单个表情 → 弹出看广告遮罩（下载闸门）
-    await cellItems[0].trigger('click')
+    // 点单张 → 弹看广告闸门
+    await items[0].trigger('click')
     expect(w.find('.ad-overlay').exists()).toBe(true)
-
-    vi.unstubAllGlobals()
   })
 })
 
@@ -447,7 +445,7 @@ describe('BgRemovePage', () => {
         ok: true,
         json: async () => ({ ok: true, result: { preview_type: 'image', image_base64: 'QUJD', title: '背景去除' } }),
       } as any)
-    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('fetch', adAwareFetch(() => fetchMock()))
     vi.useFakeTimers()
 
     const w = mount(BgRemovePage)
@@ -525,6 +523,36 @@ describe('下载 + 看广告解锁（出图页共用）', () => {
     expect(w.find('.ad-overlay').exists()).toBe(false)
     expect(clickSpy).toHaveBeenCalled()
     vi.useRealTimers()
+  })
+
+  it('广告配置带 video_url 时，遮罩渲染 <video> 播视频广告', async () => {
+    // ad-config 返回 video_url；生成接口返回出图。用 URL 感知 mock 区分两者。
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/api/tg/ad-config')) {
+        return Promise.resolve({ ok: true, json: async () => ({
+          ok: true, route: '/tg/ai-image',
+          ad: { ad_enabled: true, ad_seconds: 30, video_url: 'https://api/x/ad.mp4' },
+        }) } as any)
+      }
+      return Promise.resolve({ ok: true, json: async () => ({
+        ok: true, result: { preview_type: 'image', image_base64: 'QUJD', prompt: 'x', title: 't' },
+      }) } as any)
+    }))
+
+    const w = mount(AiImagePage)
+    await new Promise((r) => setTimeout(r, 0)) // onMounted fetchAdConfig 完成
+    await nextTick()
+    await w.find('.prompt-input').setValue('一只猫')
+    await w.find('.generate-btn').trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    await nextTick()
+
+    const dl = w.findAll('.act').find((b: any) => b.text().includes('下载'))!
+    await dl.trigger('click')
+    await nextTick()
+    const video = w.find('.ad-overlay video')
+    expect(video.exists()).toBe(true)
+    expect(video.attributes('src')).toBe('https://api/x/ad.mp4')
   })
 })
 

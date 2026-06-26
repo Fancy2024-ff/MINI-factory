@@ -16,12 +16,12 @@ from core.publisher.ad_config import (
 def test_resolve_uses_route_record_first():
     cfg = {"_default": {"ad_enabled": True, "ad_seconds": 30},
            "/tg/sticker": {"ad_enabled": False, "ad_seconds": 15}}
-    assert resolve_ad(cfg, "/tg/sticker") == {"ad_enabled": False, "ad_seconds": 15}
+    assert resolve_ad(cfg, "/tg/sticker") == {"ad_enabled": False, "ad_seconds": 15, "video_url": ""}
 
 
 def test_resolve_falls_back_to_default():
     cfg = {"_default": {"ad_enabled": False, "ad_seconds": 10}}
-    assert resolve_ad(cfg, "/tg/unknown") == {"ad_enabled": False, "ad_seconds": 10}
+    assert resolve_ad(cfg, "/tg/unknown") == {"ad_enabled": False, "ad_seconds": 10, "video_url": ""}
 
 
 def test_resolve_falls_back_to_hard_default_when_empty():
@@ -32,7 +32,7 @@ def test_resolve_route_partial_record_merges_default():
     # route 只覆盖了 enabled，seconds 应继承 _default
     cfg = {"_default": {"ad_enabled": True, "ad_seconds": 20},
            "/tg/avatar": {"ad_enabled": False}}
-    assert resolve_ad(cfg, "/tg/avatar") == {"ad_enabled": False, "ad_seconds": 20}
+    assert resolve_ad(cfg, "/tg/avatar") == {"ad_enabled": False, "ad_seconds": 20, "video_url": ""}
 
 
 def test_set_ad_updates_only_given_fields():
@@ -69,7 +69,7 @@ def test_save_load_roundtrip(tmp_path):
     save_ad_config(p, cfg)
     loaded = load_ad_config(p)
     assert loaded["/tg/sticker"] == {"ad_enabled": False, "ad_seconds": 15}
-    assert resolve_ad(loaded, "/tg/sticker") == {"ad_enabled": False, "ad_seconds": 15}
+    assert resolve_ad(loaded, "/tg/sticker") == {"ad_enabled": False, "ad_seconds": 15, "video_url": ""}
 
 
 def test_load_injects_default_if_absent(tmp_path):
@@ -77,3 +77,36 @@ def test_load_injects_default_if_absent(tmp_path):
     p.write_text(json.dumps({"/tg/avatar": {"ad_enabled": False, "ad_seconds": 5}}), encoding="utf-8")
     loaded = load_ad_config(p)
     assert "_default" in loaded
+
+
+# ---- video_url ----
+
+def test_set_and_resolve_video_url():
+    cfg = set_ad({}, "/tg/avatar", video_url="/api/tg/ad-video/tg-avatar.mp4")
+    assert resolve_ad(cfg, "/tg/avatar")["video_url"] == "/api/tg/ad-video/tg-avatar.mp4"
+
+
+def test_set_video_url_empty_clears_it():
+    cfg = set_ad({}, "/tg/avatar", video_url="/x.mp4")
+    cfg = set_ad(cfg, "/tg/avatar", video_url="")
+    assert resolve_ad(cfg, "/tg/avatar")["video_url"] == ""
+
+
+def test_set_video_none_does_not_touch_existing():
+    cfg = set_ad({}, "/tg/avatar", video_url="/x.mp4")
+    cfg = set_ad(cfg, "/tg/avatar", seconds=10)  # 不传 video_url
+    assert resolve_ad(cfg, "/tg/avatar")["video_url"] == "/x.mp4"
+
+
+def test_resolve_default_video_url_is_empty():
+    assert resolve_ad({}, "/tg/x")["video_url"] == ""
+
+
+# ---- route_to_slug ----
+
+def test_route_to_slug():
+    from core.publisher.ad_config import route_to_slug
+    assert route_to_slug("/tg/avatar") == "tg-avatar"
+    assert route_to_slug("/tg/gen/meme-king") == "tg-gen-meme-king"
+    assert "/" not in route_to_slug("/tg/x/../y") and "." not in route_to_slug("/tg/x/../y")
+    assert route_to_slug("") == "default"

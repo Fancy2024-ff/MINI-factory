@@ -18,6 +18,28 @@ const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 export const MAX_PROMPT_LEN = 500
 
+// 运行时拉取某功能页的广告闸门配置（提交中心可改）。
+// 失败一律兜底为 {enabled:true, seconds:30, videoUrl:''}，绝不因配置拉取失败阻塞下载体验。
+export async function fetchAdConfig(route: string): Promise<{ enabled: boolean; seconds: number; videoUrl: string }> {
+  try {
+    const res = await fetch(`${BASE}/api/tg/ad-config?route=${encodeURIComponent(route)}`)
+    if (!res.ok) return { enabled: true, seconds: 30, videoUrl: '' }
+    const data = await res.json()
+    const ad = data && data.ad
+    if (!ad) return { enabled: true, seconds: 30, videoUrl: '' }
+    // video_url 为站内相对路径时拼成绝对地址（TG 站与后端跨域）。
+    let videoUrl = typeof ad.video_url === 'string' ? ad.video_url : ''
+    if (videoUrl && videoUrl.startsWith('/')) videoUrl = BASE + videoUrl
+    return {
+      enabled: ad.ad_enabled !== false,
+      seconds: typeof ad.ad_seconds === 'number' ? ad.ad_seconds : 30,
+      videoUrl,
+    }
+  } catch {
+    return { enabled: true, seconds: 30, videoUrl: '' }
+  }
+}
+
 // 重试退避：起步即拉长，确保 60s 窗口内请求数 < 后端限流上限（10次/60s/IP），
 // 否则快重试会把限流窗口持续打满，导致“永久转圈、永远出不来”的自锁死。
 // 指数退避 3s→12s 封顶：60s 内约 3~4 次请求，稳在限流线以下。

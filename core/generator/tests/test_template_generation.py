@@ -68,6 +68,20 @@ def test_build_sticker_prompt_includes_theme_and_mood():
     assert "funny" in p.lower()    # 情绪映射片段
 
 
+def test_build_sticker_prompt_is_single_clean_sticker():
+    # 改为单张干净贴纸：强调单个、白底、无网格无边框，避免切图错位。
+    p = tg.build_sticker_prompt({"prompt": "猫猫"}).lower()
+    assert "single" in p
+    assert "white background" in p
+    assert "no grid" in p and "no border" in p
+
+
+def test_build_sticker_prompt_uses_expression_for_set():
+    # 做整套时每张指定不同表情动作。
+    p = tg.build_sticker_prompt({"prompt": "猫猫", "expression": "angry grumpy expression"})
+    assert "angry grumpy expression" in p
+
+
 def test_generate_template_sticker_returns_unified_structure():
     out = tg.generate_template("sticker-viral", {"prompt": "猫猫", "mood": "可爱"}, generate=_fake_ok)
     assert out["ok"] is True
