@@ -179,3 +179,59 @@ def test_tasks_health_shape(server_client, auth_headers):
         assert key in body
     assert body["total"] == 1
     assert body["pending"] == 1
+
+
+# --- 告警 A6: API 看门狗 + /api/alerts ---
+
+def test_alerts_endpoint_requires_key(server_client):
+    client, _ = server_client
+    assert client.get("/api/alerts").status_code == 401
+
+
+def test_alerts_endpoint_returns_state(server_client, auth_headers):
+    client, api = server_client
+    api._task_store().upsert_alert_state("workers_all_down", active=1,
+                                         last_fired_at="2026-06-25T10:00:00+00:00")
+    res = client.get("/api/alerts", headers=auth_headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert any(a["alert_key"] == "workers_all_down" for a in body["alerts"])
+
+
+def test_watchdog_full_down_main_chain(server_client):
+    """全挂主链路：active==0 → 看门狗 fire workers_all_down。"""
+    client, api = server_client
+    store = api._task_store()
+    assert store.count_active_workers(180) == 0
+    fired = []
+    mgr = api._alert_manager()
+    mgr.fire = lambda key, msg, **k: fired.append(key) or True
+    mgr.resolve = lambda key, **k: False
+    api._watchdog_tick()
+    assert "workers_all_down" in fired
+
+
+def test_watchdog_not_full_down_resolves(server_client):
+    client, api = server_client
+    store = api._task_store()
+    store.worker_heartbeat("w1")
+    calls = {"fire": [], "resolve": []}
+    mgr = api._alert_manager()
+    mgr.fire = lambda key, msg, **k: calls["fire"].append(key) or True
+    mgr.resolve = lambda key, **k: calls["resolve"].append(key) or True
+    api._watchdog_tick()
+    assert "workers_all_down" not in calls["fire"]
+    assert "workers_all_down" in calls["resolve"]
+
+
+def test_watchdog_guard_idempotent(server_client):
+    """startup 重复触发（--reload）只起一个看门狗 task。"""
+    client, api = server_client
+    api._alert_watchdog_started = False
+    import asyncio
+    async def run_twice():
+        await api._start_alert_watchdog()
+        first = api._alert_watchdog_started
+        await api._start_alert_watchdog()
+        return first and api._alert_watchdog_started
+    assert asyncio.new_event_loop().run_until_complete(run_twice()) is True

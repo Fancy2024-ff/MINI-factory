@@ -953,6 +953,85 @@ def _task_store():
     return _task_store_instance
 
 
+_alert_manager_instance = None
+
+
+def _alert_manager():
+    """惰性构建 API 侧 AlertManager 单例（复用 _task_store + config）。"""
+    global _alert_manager_instance
+    if _alert_manager_instance is None:
+        from core.runtime import config as cfg
+        from core.runtime.alerting import AlertManager
+        from pathlib import Path
+        tg = None
+        if cfg.TELEGRAM_BOT_TOKEN and cfg.ALERT_TELEGRAM_CHAT_ID:
+            try:
+                from core.platforms.telegram.api import TelegramClient
+                tg = TelegramClient(cfg.TELEGRAM_BOT_TOKEN)
+            except Exception:
+                tg = None
+        _alert_manager_instance = AlertManager(
+            _task_store(), telegram_client=tg,
+            chat_id=cfg.ALERT_TELEGRAM_CHAT_ID or None,
+            log_path=Path(__file__).resolve().parents[2] / "data" / "runtime" / "logs" / "alerts.log",
+            cooldown_seconds=cfg.ALERT_COOLDOWN_SECONDS,
+            recovery_confirmations=cfg.ALERT_RECOVERY_CONFIRMATIONS,
+        )
+    return _alert_manager_instance
+
+
+def _watchdog_tick():
+    """看门狗单拍：仅检测「全部 worker 掉线」（worker 自己报不了，由 API 兜底）。"""
+    from core.runtime import config as cfg
+    active = _task_store().count_active_workers(cfg.ALERT_WORKER_TIMEOUT_SECONDS)
+    mgr = _alert_manager()
+    if active == 0:
+        mgr.fire("workers_all_down", "所有 worker 掉线（API 看门狗检测）")
+    else:
+        mgr.resolve("workers_all_down")
+
+
+_alert_watchdog_started = False
+
+
+async def _alert_watchdog_loop():
+    from core.runtime import config as cfg
+    while True:
+        await asyncio.sleep(cfg.ALERT_API_POLL_SECONDS)
+        try:
+            _watchdog_tick()
+        except Exception:
+            pass  # 看门狗自身绝不崩
+
+
+@app.on_event("startup")
+async def _start_alert_watchdog():
+    """注册常驻看门狗。reload guard 防 uvicorn --reload 重复创建。"""
+    global _alert_watchdog_started
+    if _alert_watchdog_started:
+        return
+    _alert_watchdog_started = True
+    asyncio.create_task(_alert_watchdog_loop())
+
+
+@app.get("/api/alerts", dependencies=[Depends(verify_api_key)])
+def list_alerts():
+    """读当前告警态（alert_state 全表）+ 最近告警日志尾部，供排查。"""
+    from pathlib import Path
+    store = _task_store()
+    conn = store._conn()
+    try:
+        rows = conn.execute("SELECT * FROM alert_state ORDER BY last_fired_at DESC").fetchall()
+        alerts = [dict(r) for r in rows]
+    finally:
+        store._close(conn)
+    log_tail = []
+    log_path = Path(__file__).resolve().parents[2] / "data" / "runtime" / "logs" / "alerts.log"
+    if log_path.exists():
+        log_tail = log_path.read_text(encoding="utf-8").splitlines()[-50:]
+    return {"alerts": alerts, "log_tail": log_tail}
+
+
 @app.get("/api/tasks/summary", dependencies=[Depends(verify_api_key)])
 def tasks_summary():
     """任务队列统计（按状态/种类聚合 + 总数）。"""
