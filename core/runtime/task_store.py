@@ -69,6 +69,14 @@ CREATE TABLE IF NOT EXISTS workers (
     last_seen   TEXT NOT NULL,
     started_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS alert_state (
+    alert_key         TEXT PRIMARY KEY,
+    last_fired_at     TEXT,
+    active            INTEGER NOT NULL DEFAULT 0,
+    recover_confirms  INTEGER NOT NULL DEFAULT 0,
+    last_recovered_at TEXT
+);
 """
 
 # queue_id / job_id 是后加的列；旧库需 ALTER 补列（sqlite 无 IF NOT EXISTS for column）。
@@ -306,6 +314,50 @@ class TaskStore:
     def count_active_workers(self, timeout_seconds: int, now: str | None = None) -> int:
         """存活 worker 数（last_seen > now-timeout）。"""
         return len(self.list_active_workers(timeout_seconds, now=now))
+
+    def get_alert_state(self, alert_key: str) -> dict | None:
+        """读告警状态行；不存在返回 None。"""
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM alert_state WHERE alert_key = ?", (alert_key,)
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            self._close(conn)
+
+    def upsert_alert_state(self, alert_key: str, **fields) -> None:
+        """插入/部分更新告警状态。只更新传入的字段（其余保留原值）。
+
+        允许字段：last_fired_at / active / recover_confirms / last_recovered_at。
+        """
+        allowed = {"last_fired_at", "active", "recover_confirms", "last_recovered_at"}
+        bad = set(fields) - allowed
+        if bad:
+            raise ValueError(f"unknown alert_state fields: {bad}")
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            exists = conn.execute(
+                "SELECT 1 FROM alert_state WHERE alert_key = ?", (alert_key,)
+            ).fetchone()
+            if exists is None:
+                conn.execute(
+                    "INSERT INTO alert_state (alert_key, active, recover_confirms) VALUES (?, 0, 0)",
+                    (alert_key,),
+                )
+            if fields:
+                cols = ", ".join(f"{k} = ?" for k in fields)
+                conn.execute(
+                    f"UPDATE alert_state SET {cols} WHERE alert_key = ?",
+                    (*fields.values(), alert_key),
+                )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            self._close(conn)
 
     def claim_next_task(self, worker_id: str, lock_seconds: int | None = None) -> dict | None:
         """原子领取下一个可执行任务。无可领取任务时返回 None。

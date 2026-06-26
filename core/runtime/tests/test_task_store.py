@@ -471,3 +471,29 @@ def test_count_active_workers_concurrent_read_write(tmp_path):
     for t in threads:
         t.join()
     assert errors == []  # 无 database is locked
+
+
+# --- 告警 A3: alert_state 持久化 ---
+
+def test_alert_state_absent_returns_none(store):
+    assert store.get_alert_state("nope") is None
+
+
+def test_alert_state_upsert_and_read(store):
+    store.upsert_alert_state("workers_all_down", last_fired_at="2026-06-25T10:00:00+00:00",
+                             active=1, recover_confirms=0)
+    s = store.get_alert_state("workers_all_down")
+    assert s["active"] == 1 and s["last_fired_at"] == "2026-06-25T10:00:00+00:00"
+    # 部分更新：只改 recover_confirms，其它字段保留
+    store.upsert_alert_state("workers_all_down", recover_confirms=2)
+    s2 = store.get_alert_state("workers_all_down")
+    assert s2["recover_confirms"] == 2 and s2["active"] == 1
+
+
+def test_alert_state_persists_across_store_reopen(tmp_path):
+    """重启不丢：新建 store 实例读到同一库的 alert_state（进程重启不重复告警）。"""
+    db = tmp_path / "tasks.sqlite3"
+    s1 = TaskStore(db)
+    s1.upsert_alert_state("k1", active=1, last_fired_at="2026-06-25T10:00:00+00:00")
+    s2 = TaskStore(db)  # 模拟重启
+    assert s2.get_alert_state("k1")["active"] == 1
