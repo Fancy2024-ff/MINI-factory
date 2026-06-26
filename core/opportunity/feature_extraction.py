@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from core.opportunity.ability_map import AUTO_PUBLISHABLE_TEMPLATES
+
 # (feature_key_suffix, 名称, 中文名, 关键词, 模板, 所需能力, 难度, 基础fit, 基础viral)
 _DOABLE_FEATURES = [
     ("ai_photo_retouch", "AI photo retouch", "AI 修图",
@@ -116,7 +118,7 @@ def extract_features(candidate: dict) -> list[dict]:
             "required_capabilities": caps,
             "unsupported_reasons": [],
             "selected_template": template,
-            "auto_publishable": template in {"background-remover", "watermark-remover", "ai-image"},
+            "auto_publishable": template in AUTO_PUBLISHABLE_TEMPLATES,
             "data_source": "rule_fallback",
             "viral_score": base_viral,
             "production_recommended": True,

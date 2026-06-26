@@ -98,8 +98,9 @@ def test_extract_all_rule_mode_default():
 
 def test_extract_all_enrich_falls_back_on_llm_failure(monkeypatch):
     """enrich=True 但 LLM 失败 → 整体回退规则版，不断流、不抛、不产脏数据。"""
-    monkeypatch.setattr(fx, "extract_features_llm",
-                        lambda app, top_n=5: (_ for _ in ()).throw(RuntimeError("down")))
+    def _boom(app, top_n=5):
+        raise RuntimeError("down")
+    monkeypatch.setattr(fx, "extract_features_llm", _boom)
     feats = extract_all([_capcut()], enrich=True)
     assert feats  # 不断流
     assert all(f.get("data_source") == "rule_fallback" for f in feats)

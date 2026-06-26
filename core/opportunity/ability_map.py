@@ -78,6 +78,13 @@ ABILITY_MAP: dict[str, dict] = {
 # 封闭枚举：LLM 只能从中选 ability_type。
 ABILITY_TYPES = frozenset(ABILITY_MAP.keys())
 
+# 可自动上线的模板集合：从真源派生，供规则 fallback 路径复用，避免"哪些可自动上线"
+# 知识在多处硬编码漂移。
+AUTO_PUBLISHABLE_TEMPLATES = frozenset(
+    v["selected_template"] for v in ABILITY_MAP.values()
+    if v["auto_publishable"] and v["selected_template"]
+)
+
 
 def resolve(ability_type: str) -> dict:
     """返回 ability_type 的落地信息深拷贝。越界抛 KeyError(供上游触发 fallback)。"""
