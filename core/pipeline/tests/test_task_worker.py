@@ -367,3 +367,34 @@ def test_maintenance_exception_does_not_break_worker(store, monkeypatch):
     monkeypatch.setattr(store, "try_acquire_maintenance", boom)
     worker = TaskWorker(store=store, worker_id="w-test", maintenance_interval=60)
     worker._run_maintenance(force=False)  # 不抛
+
+
+# --- 告警 A5: worker 巡检 ---
+
+def test_alert_checks_writes_heartbeat(store, monkeypatch):
+    monkeypatch.setattr(store, "try_acquire_maintenance", lambda *a, **k: True)
+    worker = TaskWorker(store=store, worker_id="w-test", maintenance_interval=60)
+    worker._run_maintenance(force=True)
+    # 心跳已写：自己在 active 列表里
+    assert store.count_active_workers(180) >= 1
+
+
+def test_alert_checks_partial_down_fires(store, monkeypatch):
+    monkeypatch.setattr(store, "try_acquire_maintenance", lambda *a, **k: True)
+    fired = []
+    worker = TaskWorker(store=store, worker_id="w-test", maintenance_interval=60)
+    worker._alert.fire = lambda key, msg, **k: fired.append(key) or True
+    worker._alert.resolve = lambda key, **k: False
+    # 期望 2 个 worker，但只有自己心跳 → active=1 < 2 → 部分掉线
+    monkeypatch.setattr(worker, "_expected_workers", 2)
+    worker._run_maintenance(force=True)
+    assert "workers_partial_down" in fired
+
+
+def test_alert_checks_exception_does_not_break(store, monkeypatch):
+    monkeypatch.setattr(store, "try_acquire_maintenance", lambda *a, **k: True)
+    worker = TaskWorker(store=store, worker_id="w-test", maintenance_interval=60)
+    def boom(*a, **k):
+        raise RuntimeError("hb fail")
+    monkeypatch.setattr(store, "worker_heartbeat", boom)
+    worker._run_maintenance(force=True)  # 不抛

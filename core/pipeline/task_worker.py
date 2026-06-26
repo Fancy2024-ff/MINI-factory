@@ -31,6 +31,7 @@ from pathlib import Path
 
 from core.runtime.task_store import TaskStore, get_default_store
 from core.runtime.task_models import TaskKind
+from core.runtime import task_models as tm
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PIPELINE_RUNNER = PROJECT_ROOT / "core" / "pipeline" / "runner.py"
@@ -327,6 +328,25 @@ class TaskWorker:
         self.poll_interval = poll_interval
         self.maintenance_interval = maintenance_interval
         self._stop = False
+        # 告警：从 config 读阈值，复用 TelegramClient（缺 token/chat 时优雅降级）。
+        from core.runtime import config as _cfg
+        from core.runtime.alerting import AlertManager
+        tg = None
+        if _cfg.TELEGRAM_BOT_TOKEN and _cfg.ALERT_TELEGRAM_CHAT_ID:
+            try:
+                from core.platforms.telegram.api import TelegramClient
+                tg = TelegramClient(_cfg.TELEGRAM_BOT_TOKEN)
+            except Exception:
+                tg = None
+        self._expected_workers = _cfg.ALERT_EXPECTED_WORKERS
+        self._worker_timeout = _cfg.ALERT_WORKER_TIMEOUT_SECONDS
+        self._alert = AlertManager(
+            self.store, telegram_client=tg, chat_id=_cfg.ALERT_TELEGRAM_CHAT_ID or None,
+            log_path=PROJECT_ROOT / "data" / "runtime" / "logs" / "alerts.log",
+            cooldown_seconds=_cfg.ALERT_COOLDOWN_SECONDS,
+            recovery_confirmations=_cfg.ALERT_RECOVERY_CONFIRMATIONS,
+        )
+        self._last_failed_scan = tm.now_iso()
 
     def request_stop(self, *_args) -> None:
         """请求优雅停止：当前任务跑完后退出循环（不强杀正在跑的任务）。"""
@@ -350,8 +370,51 @@ class TaskWorker:
                 print(f"[worker {self.worker_id}] maintenance: requeued "
                       f"{stats.get('requeued', 0)}, failed {stats.get('failed', 0)}",
                       flush=True)
+            self._run_alert_checks()
         except Exception as e:  # noqa: BLE001 — 维护失败不影响消费
             print(f"[worker {self.worker_id}] maintenance error: {e}", flush=True)
+
+    def _run_alert_checks(self) -> None:
+        """worker 侧告警巡检：心跳 + 部分掉线 + 新失败任务 + 抓取零产出。
+
+        整体 try/except：告警失败绝不拖垮维护。全挂检测由 API 看门狗负责（worker 全死自己报不了）。
+        """
+        try:
+            self.store.worker_heartbeat(self.worker_id)
+            # 部分掉线：0 < active < expected。active==0 留给 API 看门狗（这里 worker 自己活着，不会是 0）。
+            active = self.store.count_active_workers(self._worker_timeout)
+            if 0 < active < self._expected_workers:
+                self._alert.fire("workers_partial_down",
+                                 f"worker 在线 {active}/{self._expected_workers}")
+            elif active >= self._expected_workers:
+                self._alert.resolve("workers_partial_down")
+            # 新失败任务：finished_at 晚于上次扫描的 failed。
+            scan_from = self._last_failed_scan
+            self._last_failed_scan = tm.now_iso()
+            for t in self.store.list_tasks(status="failed", limit=50):
+                fin = t.get("finished_at") or ""
+                if fin > scan_from:
+                    self._alert.fire(f"task_failed:{t['id']}",
+                                     f"任务失败 kind={t.get('kind')} code={t.get('error_code')}")
+            # 抓取零产出：读 crawl-report.json 的 counts.queue_pending（纯读数据文件，不 import 抓取代码）。
+            self._check_crawl_zero_output()
+        except Exception as e:  # noqa: BLE001
+            print(f"[worker {self.worker_id}] alert check error: {e}", flush=True)
+
+    def _check_crawl_zero_output(self) -> None:
+        """读最近 crawl-report，queue_pending==0 则告警（按日期 key 去重）。"""
+        import json
+        report_path = PROJECT_ROOT / "data" / "opportunity" / "crawl-report.json"
+        if not report_path.exists():
+            return
+        try:
+            rep = json.loads(report_path.read_text(encoding="utf-8-sig"))
+        except Exception:
+            return
+        counts = rep.get("counts") or {}
+        date = rep.get("date") or "unknown"
+        if counts.get("queue_pending", -1) == 0:
+            self._alert.fire(f"crawl_zero_output:{date}", f"抓取 {date} 零产出（queue_pending=0）")
 
     def process_one(self) -> dict | None:
         """claim 并执行一个任务。返回执行后的任务 dict；无可领取任务返回 None。"""
