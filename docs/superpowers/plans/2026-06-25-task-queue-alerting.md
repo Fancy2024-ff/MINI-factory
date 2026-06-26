@@ -457,7 +457,7 @@ def test_no_telegram_configured_degrades(store, tmp_path):
 - [ ] **步骤 4：运行测试验证通过**
 
 运行：`.venv/bin/python -m pytest core/runtime/tests/test_alerting.py -v`
-预期：8 PASS。
+预期：7 PASS。
 
 - [ ] **步骤 5：Commit**
 
@@ -499,9 +499,12 @@ class AlertManager:
         now = now or tm.now_iso()
         st = self.store.get_alert_state(alert_key)
         if st and st.get("active") and st.get("last_fired_at"):
+            # 该 key 仍在告警态又被触发：问题没恢复，作废进行中的恢复确认（防抖动击穿）。
+            if int(st.get("recover_confirms", 0)) != 0:
+                self.store.upsert_alert_state(alert_key, recover_confirms=0)
             elapsed = self._elapsed(st["last_fired_at"], now)
             if elapsed < self.cooldown_seconds:
-                return False  # 冷却期内，抑制
+                return False  # 冷却期内，抑制（recover_confirms 已在上面归零）
         self.store.upsert_alert_state(
             alert_key, last_fired_at=now, active=1, recover_confirms=0
         )
