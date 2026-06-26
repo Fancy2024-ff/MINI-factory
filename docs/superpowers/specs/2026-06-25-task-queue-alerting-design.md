@@ -2,7 +2,7 @@
 
 - 日期：2026-06-25
 - 分支：refactor/core-capability-domains
-- 状态：待实现
+- 状态：已实现
 - 归属：诊断文档「Claude E」任务 2（错误监控/告警）。worker 常驻（任务 1）已完成。
 
 ## 目标
