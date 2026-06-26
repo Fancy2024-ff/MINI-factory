@@ -72,3 +72,18 @@ WECHAT_APPID = os.getenv("WECHAT_APPID", "")
 WECHAT_SECRET = os.getenv("WECHAT_SECRET", "")
 ALIPAY_APPID = os.getenv("ALIPAY_APPID", "")
 DOUYIN_APPID = os.getenv("DOUYIN_APPID", "")
+
+# ── 告警系统（Claude E 任务 2）──────────────────────────────────
+# 告警发往的 Telegram chat（复用 TELEGRAM_BOT_TOKEN）。空 = 只写本地日志，不发 TG。
+ALERT_TELEGRAM_CHAT_ID = os.getenv("ALERT_TELEGRAM_CHAT_ID", "")
+# 同一 alert_key 冷却期（秒）：冷却期内同类告警不重复发。
+ALERT_COOLDOWN_SECONDS = int(os.getenv("ALERT_COOLDOWN_SECONDS", "1800"))
+# 期望常驻 worker 数：active < 此值 → 部分掉线告警。
+ALERT_EXPECTED_WORKERS = int(os.getenv("ALERT_EXPECTED_WORKERS", "2"))
+# worker 掉线判定超时（秒）：last_seen 早于 now-该值 视为掉线。
+# 必须 >> 心跳间隔(60s)，取 3 倍=180，避免「还没到下一个心跳点」被误判掉线。
+ALERT_WORKER_TIMEOUT_SECONDS = int(os.getenv("ALERT_WORKER_TIMEOUT_SECONDS", "180"))
+# API 看门狗轮询间隔（秒）：兜底检测「全部 worker 掉线」。
+ALERT_API_POLL_SECONDS = int(os.getenv("ALERT_API_POLL_SECONDS", "120"))
+# 恢复确认次数：连续 N 次检测到恢复才发「已恢复」，防抖动刷屏。
+ALERT_RECOVERY_CONFIRMATIONS = int(os.getenv("ALERT_RECOVERY_CONFIRMATIONS", "2"))
