@@ -274,6 +274,7 @@ def _run_opportunity_crawl(payload: dict, ctx: TaskContext) -> dict:
     from core.opportunity import crawl_runner
 
     ctx.check_cancelled()  # 执行前检查
+    # run_once 内部会归一化字符串/列表入参（_as_list），故 payload 原值（含字符串）可直接透传。
     rep = crawl_runner.run_once(
         regions=payload.get("regions"), platforms=payload.get("platforms"),
         categories=payload.get("categories"), entry_types=payload.get("entry_types"),

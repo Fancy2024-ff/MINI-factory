@@ -29,6 +29,57 @@ def _fake_gp(category, limit, country, entry_type=cfg.SEARCH, keywords=None):
     ]
 
 
+# --- A1: run_once 防御字符串入参（worker crawl 路径回归） -------------------
+
+def test_run_once_accepts_string_platforms_regions():
+    """worker 传字符串 'app_store' 不应被按字符遍历成 0 任务。"""
+    calls = []
+
+    def fake_appstore(category, limit, country, entry_type=cfg.SEARCH, keywords=None):
+        calls.append(country)
+        return [AppInfo(name="X", app_id=f"as-{country}", source=AppSource.APP_STORE,
+                        category="photo", description="AI photo retouch background remover")]
+
+    rep = cr.run_once(
+        regions="US", platforms="app_store", categories="photo", entry_types="search",
+        limit=5, dry_run=True,
+        appstore_fetch=fake_appstore, googleplay_fetch=lambda **k: [],
+    )
+    # 字符串被正确拆成 list → 至少发起了一次真实任务（不是 0）
+    assert rep["summary"]["tasks"] >= 1
+    assert len(calls) >= 1
+
+
+def test_run_once_accepts_csv_string_multi_values():
+    """逗号分隔字符串 'CN,US' 应被拆成多地区，而非按字符遍历。"""
+    seen = []
+
+    def fake_appstore(category, limit, country, entry_type=cfg.SEARCH, keywords=None):
+        seen.append(country)
+        return [AppInfo(name="X", app_id=f"as-{country}", source=AppSource.APP_STORE,
+                        category="photo", description="AI photo retouch")]
+
+    cr.run_once(
+        regions="CN,US", platforms="app_store", categories="photo", entry_types="search",
+        dry_run=True, appstore_fetch=fake_appstore, googleplay_fetch=lambda **k: [],
+    )
+    assert "cn" in seen and "us" in seen, f"应按逗号拆成 CN/US，实际: {seen}"
+
+
+def test_run_once_still_accepts_list():
+    """list 入参保持原有行为。"""
+    def fake_appstore(category, limit, country, entry_type=cfg.SEARCH, keywords=None):
+        return [AppInfo(name="Y", app_id=f"as-{country}", source=AppSource.APP_STORE,
+                        category="photo", description="AI photo retouch background remover")]
+
+    rep = cr.run_once(
+        regions=["US"], platforms=["app_store"], categories=["photo"], entry_types=["search"],
+        limit=5, dry_run=True,
+        appstore_fetch=fake_appstore, googleplay_fetch=lambda **k: [],
+    )
+    assert rep["summary"]["tasks"] >= 1
+
+
 def test_cn_appstore_supported_in_config():
     assert cfg.REGION_SUPPORT["CN"]["app_store"] == cfg.SUPPORTED
     assert "CN" in cfg.DEFAULT_APP_STORE_REGIONS

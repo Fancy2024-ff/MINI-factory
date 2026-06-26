@@ -38,6 +38,23 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _as_list(value) -> list[str] | None:
+    """把 'a,b' 或 ['a','b'] 统一成 ['a','b']；空/None 返回 None（让调用方走默认）。
+
+    防御 worker 误传字符串导致 for x in 'app_store' 按字符遍历的 bug。
+    只负责"字符串→列表、空→None"，不负责填默认。
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        items = [v.strip() for v in value.split(",") if v.strip()]
+        return items or None
+    if isinstance(value, (list, tuple)):
+        items = [str(v).strip() for v in value if str(v).strip()]
+        return items or None
+    return None
+
+
 def _write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -133,6 +150,15 @@ def run_once(
     dry_run=True 时不写盘，只返回 report（仍会执行抓取与处理）。
     """
     date_str = date_str or datetime.now().strftime("%Y%m%d")
+    # 防御性归一化：worker crawl 路径可能透传字符串（如 'app_store'），
+    # 不归一化会被 for x in str 按字符遍历成 0 任务、队列写空。
+    regions = _as_list(regions)
+    # 地区大小写归一：REGION_SUPPORT 键为大写，CLI/auto 路径均 upper，保持一致避免静默跳过。
+    if regions is not None:
+        regions = [r.upper() for r in regions]
+    platforms = _as_list(platforms)
+    categories = _as_list(categories)
+    entry_types = _as_list(entry_types)
     platforms = platforms or cfg.PLATFORMS
     categories = categories or cfg.CATEGORIES
     entry_types = entry_types or cfg.ENTRY_TYPES
