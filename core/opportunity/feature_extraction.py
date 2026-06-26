@@ -116,6 +116,8 @@ def extract_features(candidate: dict) -> list[dict]:
             "required_capabilities": caps,
             "unsupported_reasons": [],
             "selected_template": template,
+            "auto_publishable": template in {"background-remover", "watermark-remover", "ai-image"},
+            "data_source": "rule_fallback",
             "viral_score": base_viral,
             "production_recommended": True,
             "reason": reason,
@@ -138,6 +140,8 @@ def extract_features(candidate: dict) -> list[dict]:
             "required_capabilities": [],
             "unsupported_reasons": reasons,
             "selected_template": "",
+            "auto_publishable": False,
+            "data_source": "rule_fallback",
             "viral_score": 0,
             "production_recommended": False,
             "reason": ["原 App 含该功能，但不适合第一阶段小程序化"],
@@ -152,9 +156,26 @@ def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_")
 
 
-def extract_all(candidates: list[dict]) -> list[dict]:
-    """对候选池所有 App 拆解，返回全部 FeatureOpportunity（含不推荐项，便于复盘）。"""
-    out: list[dict] = []
+def extract_all(candidates: list[dict], enrich: bool = False) -> list[dict]:
+    """对候选池所有 App 拆解，返回全部 FeatureOpportunity(含不推荐项，便于复盘)。
+
+    enrich=False(默认): 规则版(向后兼容，crawl_runner 不改)。
+    enrich=True: 逐 App 走 LLM 拆分器；任一 App LLM 失败则该 App 整体回退规则版，
+    不断流、不抛、不产脏数据。
+    """
+    if not enrich:
+        out: list[dict] = []
+        for cand in candidates:
+            out.extend(extract_features(cand))
+        return out
+
+    from core.opportunity import feature_extraction_llm as _llm
+
+    out = []
     for cand in candidates:
-        out.extend(extract_features(cand))
+        try:
+            specs = _llm.extract_features_llm(cand)
+            out.extend(specs)
+        except Exception:  # noqa: BLE001 — LLM 失败 → 该 App 整体回退规则版
+            out.extend(extract_features(cand))
     return out
