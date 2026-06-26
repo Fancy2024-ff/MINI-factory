@@ -22,7 +22,7 @@ App 独特功能拆不出来，产物与原 App 必然对不上。
 |---|---|---|
 | ability_type 枚举 | 抽象语义集（封闭枚举） | LLM 自由抽语义，C 端逐步接入落地 |
 | LLM 调用位置 | 独立 enrichment 步骤 | 不污染 runner「不依赖 LLM」主链路 |
-| 每 App 功能数 | Top-N 可落地优先（≤5） | 控成本/队列长度，优先可落地 |
+| 每 App 功能数 | Top-N 仅约束入队 buildable 项（≤5） | 控成本/队列，但不截断复盘清单（见 §3.2） |
 | LLM 不可用 fallback | 规则版全量兜底 | 永不断流，产物打 data_source 区分 |
 | buildable=false 处理 | 记录但不入队 | 保留市场信号与能力缺口清单，仅入复盘 |
 | buildable 语义 | 双布尔（见 §4） | 消解「模板在白名单但 task=pending」矛盾态 |
@@ -85,6 +85,23 @@ LLM 的 0~1 置信度同名异义异量纲，误用即全员卡门槛被 skip。
 
 **修正 3：buildable 门控接入（见 §4）。**
 
+### 3.2 Top-N 语义：只约束入队，不截断复盘清单
+
+「Top-N（≤5）」**只作用于进生产队列的 buildable=true 功能**，用于控成本/队列长度。
+buildable=false 的功能（往往正是 App 的灵魂功能，如 CapCut 的剪辑/字幕）**不占这 5 个
+名额、全量进复盘清单**，绝不被 ≤5 截断。
+
+理由：若 ≤5 同时约束全部功能，App 的高分核心功能会因 buildable=false 被排后截没，产物只
+剩边缘小功能，仍抓不住 App 本质。拆两条路：
+
+- **生产队列**：buildable=true 中按分排序取 Top-5 入队（成本可控）。
+- **能力缺口/复盘清单**：所有功能（含全部 buildable=false 高分核心功能）完整保留，写盘复盘。
+  这是「这个 App 真正值钱但我们还做不了」的能力清单，为后续扩能力（video-edit 等）提供依据。
+
+实现上：`extract_all` 返回全量 FeatureSpec（不截断）；Top-N 截断只发生在「入队的 buildable
+项」这一步，且因 buildable=false 已在闸门 A 出局（§4.2），Top-N 与 buildable=false 复盘记录
+天然不冲突。
+
 ## 4. ability_map：枚举集 + 映射表（C 维护的唯一真源）
 
 新建 [core/opportunity/ability_map.py](../../../core/opportunity/ability_map.py)，B 与 C 都
@@ -93,9 +110,9 @@ import，杜绝并行枚举。LLM 只能产下面封闭枚举的 ability_type（
 | ability_type | selected_template | ∈_KNOWN_TEMPLATES | (ability, task) | buildable | auto_publishable |
 |---|---|---|---|---|---|
 | image-gen | ai-image | ✅ | text2img / generate_image | ✅ | ✅ |
-| image-edit | ai-image | ✅ | text2img / generate_image | ✅ | ✅ |
 | bg-remove | background-remover | ✅ | img2img / background_remove | ✅ | ✅ |
 | watermark-remove | watermark-remover | ✅ | img2img / watermark_remove | ✅ | ✅ |
+| image-edit | "" | — | — | ❌ | ❌ |
 | avatar-gen | avatar-viral | ✅ | text2img / pending | ✅ | ❌ |
 | sticker-gen | sticker-viral | ✅ | text2img / pending | ✅ | ❌ |
 | pet-talk | pet-talk-viral | ✅ | text2img / pending | ✅ | ❌ |
@@ -112,6 +129,32 @@ import，杜绝并行枚举。LLM 只能产下面封闭枚举的 ability_type（
 [classifier._KNOWN_TEMPLATES](../../../core/opportunity/classifier.py)；(ability, task) 与
 `_TEMPLATE_ABILITY_TASK` 一致；task 白名单与
 [feature_registry.TASK_WHITELIST](../../../core/publisher/feature_registry.py) 一致。
+
+### 4.0 铁律：图生图/视频/音频语义禁止映射到 text2img 文生图
+
+这是项目最初核心 Bug（「图片处理功能变成文本输入框」）的根因，必须在映射表层根治：
+
+> 任何「处理一张已上传的图/视频/音频」的语义，绝不允许映射到 text2img 文生图模板。
+
+事实依据：项目里图生图（img2img，走 `/api/generation/image-edit`）的真实能力**只有
+background_remove / watermark_remove 两个具体 task**——
+[apps/api/main.py:1609-1612](../../../apps/api/main.py) 仅对这两个 task 有名副其实的内置
+prompt，其它 task 会兜底落到 `BG_REMOVE_PROMPT`，名实不符。`TASK_WHITELIST` 也无「通用
+图生图」task。
+
+因此：
+- **image-edit**（通用图生图：老照片修复 / 图片增强 / 转风格等无对应具体 task 的语义）→
+  **buildable=false，selected_template=""**，`unsupported_reasons` 写明「通用图生图无对应
+  后端 task，仅 bg-remove / watermark-remove 可落地」。LLM 若把这类抽成 image-edit，进复盘
+  不进队列，绝不生成 text2img 壳。
+- 仅 **bg-remove / watermark-remove** 两个有名副其实后端的图生图语义 buildable=true。
+
+同类自检（语义是「处理已有素材」却被映射到 text2img 的，全部已设 buildable=false）：
+image-edit / video-edit / audio-edit / realtime-camera / 3d-ar / multi-step。表中标
+buildable=true 且落 text2img 的（image-gen / avatar-gen / sticker-gen / pet-talk /
+blessing / funny-video / text-gen）均为「凭文字/参数生成新内容」语义，不接收待处理素材，
+无名实不符问题。
+
 
 ### 4.1 双布尔语义（消解矛盾态）
 
@@ -156,7 +199,8 @@ review_required，由现有人工闸门兜住后端上线。
 - **ability_map.py**（新建）：ABILITY_TYPES 枚举 + 映射表，C 维护的唯一真源。
 - **feature_extraction_llm.py**（新建）：LLM 抽取器。注入 App 真实
   name/description/features/category → 强制 JSON schema 输出功能列表 → schema 严格校验
-  → 经 ability_map 回填落地层 → Top-N（buildable 优先，≤5）。
+  → 经 ability_map 回填落地层 → 返回全量 FeatureSpec（Top-N≤5 截断只在入队 buildable 项时
+  施加，不截断复盘清单，见 §3.2）。
 - **feature_extraction.py**（改）：`extract_all(candidates, enrich=False)` 改为门面。
   enrich=True 走 LLM；任何失败（超时/不可用/schema 失败）整体回退现有规则版；产物打
   data_source。签名向后兼容，[crawl_runner.py:247](../../../core/opportunity/crawl_runner.py)
@@ -172,6 +216,7 @@ LLM 接入：复用 [core/integrations/llm.py](../../../core/integrations/llm.py
 
 用真实复杂 App 端到端测：
 - **CapCut**：应拆出 视频剪辑(video-edit, buildable=false) / 自动字幕(video-edit, false) /
+  老照片修复或图片增强(image-edit, **buildable=false**，验证通用图生图不被映射成 text2img) /
   背景去除(bg-remove, true+auto_publishable) / 头像(avatar-gen, buildable=true,
   auto_publishable=false)。
 - **Notion**：text-gen / multi-step(false)。
@@ -183,6 +228,10 @@ LLM 接入：复用 [core/integrations/llm.py](../../../core/integrations/llm.py
 4. LLM 关闭时规则版全量兜底，不断流，data_source=rule_fallback。
 5. 同 App 同功能两次抽取 feature_key 恒定（去重不失效）。
 6. ability_type 越界 / schema 不合法时整体回退，不产脏数据。
+7. **任何图生图/视频/音频「处理已有素材」语义的 selected_template 均不为 text2img 文生图
+   模板**（§4.0 铁律，防核心 Bug 回归）。
+8. **Top-N≤5 只截断入队 buildable 项；buildable=false 的高分核心功能全量进复盘清单不被截断**
+   （构造一个拆出 >5 个功能、其中含多个高分 buildable=false 的 App 验证）。
 
 ## 7. 不做（YAGNI）
 
