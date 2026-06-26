@@ -324,3 +324,38 @@ def test_candidate_pool_tracks_rating_available():
     by_id = {c["canonical_key"]: c for c in pool}
     assert by_id["app_store:1"]["rating_available"] is False
     assert by_id["app_store:2"]["rating_available"] is True
+
+
+# --- A2: force_refresh 绕过当日快照缓存 -------------------------------------
+
+def test_force_refresh_bypasses_cache(monkeypatch, tmp_path):
+    """force_refresh=True 时即使有当日快照也重新抓取；默认仍命中缓存。"""
+    calls = {"n": 0}
+
+    def fake_appstore(category, limit, country, entry_type=cfg.SEARCH, keywords=None):
+        calls["n"] += 1
+        return [AppInfo(name="X", app_id=f"as-{country}-{entry_type}", source=AppSource.APP_STORE,
+                        category="photo", description="AI photo retouch background remover")]
+
+    # 快照 + 写盘产物都指到 tmp，避免污染真实 data/。
+    monkeypatch.setattr(cr, "SNAP_DIR", tmp_path / "snapshots")
+    monkeypatch.setattr(cr, "OPP_DIR", tmp_path / "opp")
+    monkeypatch.setattr(cr, "PROCESSED_PATH", tmp_path / "opp" / "processed-apps.json")
+
+    common = dict(regions="US", platforms="app_store", categories="photo",
+                  entry_types="search", limit=3,
+                  appstore_fetch=fake_appstore, googleplay_fetch=lambda **k: [])
+
+    # 第一次：真抓 + 写快照（非 dry_run）。
+    cr.run_once(**common)
+    after_first = calls["n"]
+    assert after_first >= 1, "第一次应真实抓取"
+
+    # 第二次默认（用缓存）：命中当日快照，不应再抓。
+    cr.run_once(**common)
+    assert calls["n"] == after_first, "默认应命中缓存不重抓"
+
+    # 第三次 force_refresh=True：绕过缓存重抓。
+    cr.run_once(**common, force_refresh=True)
+    assert calls["n"] > after_first, "force_refresh 应绕过缓存重抓"
+

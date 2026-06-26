@@ -29,7 +29,7 @@ def test_run_auto_orchestrates_crawl_then_generate(tmp_path, monkeypatch):
               "parent_app_key": "app_store:1", "feature_name_cn": "AI 修图",
               "selected_template": "ai-image", "status": "pending"}]
 
-    def fake_crawl(regions=None, platforms=None, limit=None):
+    def fake_crawl(regions=None, platforms=None, limit=None, force_refresh=False):
         (opp / "opportunity-queue.json").write_text(json.dumps(queue, ensure_ascii=False), encoding="utf-8")
         return _fake_crawl_report()
 
@@ -64,7 +64,7 @@ def test_run_auto_stops_when_queue_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(auto_runner, "QUEUE_PATH", opp / "opportunity-queue.json")
     monkeypatch.setattr(auto_runner, "OUTPUTS_DIR", tmp_path / "outputs")
 
-    def fake_crawl(regions=None, platforms=None, limit=None):
+    def fake_crawl(regions=None, platforms=None, limit=None, force_refresh=False):
         (opp / "opportunity-queue.json").write_text("[]", encoding="utf-8")  # 空队列
         return _fake_crawl_report()
 

@@ -68,6 +68,7 @@ def run_auto(
     platforms: str = "",
     limit: int | None = None,
     max_generate: int = 1,
+    force_refresh: bool = False,
 ) -> dict:
     """抓取 → 队列 → 生成。返回 auto-report dict 并写盘。"""
     base_job = job_id or ("auto-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
@@ -75,7 +76,8 @@ def run_auto(
     _platforms = [p.strip() for p in platforms.split(",") if p.strip()] or None
 
     print(f"[auto] 1/3 抓取市场数据 regions={_regions} platforms={_platforms} ...")
-    crawl_report = crawl_runner.run_once(regions=_regions, platforms=_platforms, limit=limit)
+    crawl_report = crawl_runner.run_once(regions=_regions, platforms=_platforms, limit=limit,
+                                         force_refresh=force_refresh)
     crawl_counts = crawl_report.get("counts", {})
     print(f"[auto]   candidates={crawl_counts.get('candidates')} "
           f"queue_pending={crawl_counts.get('queue_pending')}")

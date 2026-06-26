@@ -35,6 +35,10 @@ OPPORTUNITY_DIR = DATA_DIR / "opportunity"
 AD_CONFIG_PATH = PLATFORM_AUTH_DIR / "ad-config.json"
 TELEGRAM_AUTH_PATH = PLATFORM_AUTH_DIR / "telegram.json"
 FEATURES_REGISTRY_PATH = PROJECT_ROOT / "apps" / "web" / "src" / "tg" / "registry" / "features.generated.json"
+# 广告视频上传：本地存 data/ad-videos/，经 public 路由 /api/tg/ad-video/<file> 服务。
+AD_VIDEOS_DIR = DATA_DIR / "ad-videos"
+MAX_AD_VIDEO_BYTES = int(os.environ.get("MAX_AD_VIDEO_BYTES", str(50 * 1024 * 1024)))
+_ALLOWED_VIDEO_MIME = {"video/mp4": ".mp4", "video/webm": ".webm"}
 
 
 def _real_inputs_file() -> Path:
@@ -165,6 +169,8 @@ class PipelineStartRequest(BaseModel):
     platforms: str = "app_store"
     limit: int | None = 10
     max_generate: int = 1
+    # force_refresh=True 时绕过当日快照缓存强制重抓（默认 False 用缓存）。
+    force_refresh: bool = False
     # 执行模型：async（默认，正式主路径）= 入队由 worker 异步执行；
     # sync（兼容/调试）= 旧的请求线程内直起子进程模型，非主路径。
     execution_mode: Literal["async", "sync"] = "async"
@@ -296,6 +302,7 @@ def enqueue_pipeline_task(
     priority: int = 100,
     max_attempts: int = 3,
     dedupe_queue_id: bool = False,
+    force_refresh: bool = False,
 ) -> dict:
     """统一入队 helper：把一次 pipeline 动作（mode）建模成 task 并入 task_store。
 
@@ -336,6 +343,8 @@ def enqueue_pipeline_task(
         payload["limit"] = limit
     if mode == "auto":
         payload["max_generate"] = max_generate
+    if force_refresh:
+        payload["force_refresh"] = True
 
     task_id = store.enqueue_task(
         kind=kind, payload=payload, priority=priority, max_attempts=max_attempts,
@@ -368,6 +377,7 @@ async def pipeline_start(req: PipelineStartRequest = PipelineStartRequest()):
         res = enqueue_pipeline_task(
             req.mode, regions=req.regions, platforms=req.platforms,
             limit=req.limit, max_generate=req.max_generate,
+            force_refresh=req.force_refresh,
         )
         return {
             "accepted": True, "execution_mode": "async",
@@ -1029,6 +1039,83 @@ def get_tg_ad_config(route: Optional[str] = Query(default=None)):
     if route:
         return {"ok": True, "route": route, "ad": resolve_ad(cfg, route)}
     return {"ok": True, "config": cfg}
+
+
+@app.post("/api/submit/ad-video", dependencies=[Depends(verify_api_key)])
+async def upload_ad_video(route: str = Form(...), video: UploadFile = File(...)):
+    """提交中心：为某功能页上传广告视频（替换下载闸门的倒计时黑屏）。
+
+    校验类型(mp4/webm)+大小(50MB)，存 data/ad-videos/<slug>.<ext>，
+    把 video_url 写入 ad-config 该 route。返回新 video_url。
+    """
+    from core.publisher.ad_config import load_ad_config, set_ad, save_ad_config, route_to_slug
+
+    content_type = (video.content_type or "").lower()
+    ext = _ALLOWED_VIDEO_MIME.get(content_type)
+    if not ext:
+        return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "仅支持 MP4 / WebM 视频"}}
+    data = await video.read()
+    if not data:
+        return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "视频为空"}}
+    if len(data) > MAX_AD_VIDEO_BYTES:
+        return {"ok": False, "error": {"code": "VALIDATION_ERROR", "message": "视频过大（上限 50MB）"}}
+
+    slug = route_to_slug(route)
+    AD_VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+    # 同一 route 换格式时清掉旧扩展名文件，避免残留。
+    for old in AD_VIDEOS_DIR.glob(f"{slug}.*"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    filename = f"{slug}{ext}"
+    (AD_VIDEOS_DIR / filename).write_bytes(data)
+
+    video_url = f"/api/tg/ad-video/{filename}"
+    cfg = load_ad_config(AD_CONFIG_PATH)
+    cfg = set_ad(cfg, route, video_url=video_url)
+    save_ad_config(AD_CONFIG_PATH, cfg)
+    return {"ok": True, "route": route, "video_url": video_url}
+
+
+@app.delete("/api/submit/ad-video", dependencies=[Depends(verify_api_key)])
+def delete_ad_video(route: str = Query(...)):
+    """提交中心：删除某功能页广告视频（文件 + 清 config video_url）。退回倒计时黑屏。"""
+    from core.publisher.ad_config import load_ad_config, set_ad, save_ad_config, route_to_slug
+
+    slug = route_to_slug(route)
+    if AD_VIDEOS_DIR.exists():
+        for f in AD_VIDEOS_DIR.glob(f"{slug}.*"):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    cfg = load_ad_config(AD_CONFIG_PATH)
+    cfg = set_ad(cfg, route, video_url="")
+    save_ad_config(AD_CONFIG_PATH, cfg)
+    return {"ok": True, "route": route, "video_url": ""}
+
+
+@app.get("/api/tg/ad-video/{filename}")
+def get_ad_video(filename: str):
+    """public：返回广告视频文件，供 TG 站 <video> 跨域播放。
+
+    安全：filename 白名单 [\\w.-]+ 且解析后必须落在 AD_VIDEOS_DIR 内，防目录穿越。
+    """
+    from fastapi.responses import FileResponse
+    import re as _re
+
+    if not _re.fullmatch(r"[A-Za-z0-9_.-]+", filename or ""):
+        raise HTTPException(404, "not found")
+    target = (AD_VIDEOS_DIR / filename).resolve()
+    try:
+        target.relative_to(AD_VIDEOS_DIR.resolve())
+    except ValueError:
+        raise HTTPException(404, "not found")
+    if not target.is_file():
+        raise HTTPException(404, "not found")
+    media = "video/webm" if filename.endswith(".webm") else "video/mp4"
+    return FileResponse(str(target), media_type=media)
 
 
 # ---------------------------------------------------------------------------

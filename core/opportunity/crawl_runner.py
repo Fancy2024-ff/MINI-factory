@@ -140,6 +140,7 @@ def run_once(
     limit: int | None = None,
     date_str: str | None = None,
     dry_run: bool = False,
+    force_refresh: bool = False,
     appstore_fetch: Callable | None = None,
     googleplay_fetch: Callable | None = None,
 ) -> dict:
@@ -164,7 +165,7 @@ def run_once(
     entry_types = entry_types or cfg.ENTRY_TYPES
     limit = limit or cfg.CRAWL_PARAMS["per_request_limit"]
     max_tasks = cfg.CRAWL_PARAMS["max_tasks_per_run"]
-    use_cache = cfg.CRAWL_PARAMS["use_cache"]
+    use_cache = cfg.CRAWL_PARAMS["use_cache"] and not force_refresh
 
     if appstore_fetch is None:
         from core.opportunity.scrapers.appstore import fetch_ai_apps_appstore as appstore_fetch

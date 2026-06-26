@@ -279,6 +279,7 @@ def _run_opportunity_crawl(payload: dict, ctx: TaskContext) -> dict:
         regions=payload.get("regions"), platforms=payload.get("platforms"),
         categories=payload.get("categories"), entry_types=payload.get("entry_types"),
         limit=payload.get("limit"), dry_run=bool(payload.get("dry_run", False)),
+        force_refresh=bool(payload.get("force_refresh", False)),
     )
     return {"counts": rep.get("counts", {}), "queue_stats": rep.get("queue_stats", {})}
 
@@ -294,6 +295,7 @@ def _run_pipeline_auto(payload: dict, ctx: TaskContext) -> dict:
         platforms=_csv(payload.get("platforms") or ""),
         limit=payload.get("limit"),
         max_generate=int(payload.get("max_generate", 1)),
+        force_refresh=bool(payload.get("force_refresh", False)),
     )
     return {"auto_job_id": rep.get("auto_job_id"),
             "generated_jobs": rep.get("generated_jobs", [])}
