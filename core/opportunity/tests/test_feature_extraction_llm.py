@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from core.opportunity import feature_extraction_llm as fx
+from core.opportunity.ranking import rank_features
 
 
 @pytest.fixture(autouse=True)
@@ -212,3 +213,55 @@ def test_call_llm_all_attempts_fail_raises(monkeypatch):
     monkeypatch.setattr(fx, "get_llm", lambda *a, **k: _LLM())
     with pytest.raises(RuntimeError):
         fx._call_llm({"name": "X", "description": "d"})
+
+
+def test_gate_a_unbuildable_not_in_ranked(monkeypatch):
+    """闸门 A：buildable=false(video-edit/image-edit)不进 rank_features，但在 extract 全量产物里。"""
+    feats = [
+        fx.LLMFeature(feature_name="Background Remover", feature_name_cn="背景去除",
+                      description="去背景", ability_type="bg-remove", input_modality=["image"],
+                      output_modality="image", complexity="easy", extraction_confidence=0.9),
+        fx.LLMFeature(feature_name="Auto Captions", feature_name_cn="自动字幕",
+                      description="长视频字幕", ability_type="video-edit", input_modality=["video"],
+                      output_modality="video", complexity="hard", extraction_confidence=0.85),
+    ]
+    monkeypatch.setattr(fx, "_call_llm", lambda app: fx.LLMFeatureList(features=feats))
+    fx._clear_cache()
+    cand = {"canonical_key": "app_store:123", "name": "CapCut", "name_cn": "剪映",
+            "description": "video editor", "regions": ["US", "CN"],
+            "entry_types": ["top_free"], "rating_available": True}
+    specs = fx.extract_features_llm(cand)
+    by_key = {"app_store:123": cand}
+    ranked = rank_features(specs, by_key)
+    ranked_types = {r["ability_type"] for r in ranked}
+    assert "bg-remove" in ranked_types          # buildable 进 ranked
+    assert "video-edit" not in ranked_types      # buildable=false 被闸门 A 挡住
+    assert any(s["ability_type"] == "video-edit" for s in specs)  # 但全量产物保留(复盘)
+
+
+def test_capcut_end_to_end(monkeypatch):
+    """CapCut: 剪辑/字幕(buildable=false,复盘) + 背景去除(buildable+auto_publishable)
+    + 头像(buildable,auto_publishable=false,标 review)。"""
+    feats = [
+        fx.LLMFeature(feature_name="Background Remover", feature_name_cn="背景去除",
+                      description="去背景", ability_type="bg-remove", input_modality=["image"],
+                      output_modality="image", complexity="easy", extraction_confidence=0.92),
+        fx.LLMFeature(feature_name="AI Avatar", feature_name_cn="AI 头像",
+                      description="生成头像", ability_type="avatar-gen", input_modality=["text"],
+                      output_modality="image", complexity="medium", extraction_confidence=0.88),
+        fx.LLMFeature(feature_name="Video Editing", feature_name_cn="视频剪辑",
+                      description="时间线剪辑", ability_type="video-edit", input_modality=["video"],
+                      output_modality="video", complexity="hard", extraction_confidence=0.9),
+    ]
+    monkeypatch.setattr(fx, "_call_llm", lambda app: fx.LLMFeatureList(features=feats))
+    fx._clear_cache()
+    specs = fx.extract_features_llm({"canonical_key": "app_store:123", "name": "CapCut",
+                                     "description": "video editor"})
+    by = {s["ability_type"]: s for s in specs}
+
+    assert by["bg-remove"]["buildable"] and by["bg-remove"]["auto_publishable"]
+    assert by["avatar-gen"]["buildable"] and not by["avatar-gen"]["auto_publishable"]
+    assert not by["video-edit"]["buildable"]
+    assert by["video-edit"]["unsupported_reasons"]
+    # feature_key 不含 ability_type
+    assert by["bg-remove"]["feature_key"] == "app_store:123:background-remover"
